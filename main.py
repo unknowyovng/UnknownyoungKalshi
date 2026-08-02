@@ -1,18 +1,30 @@
+import threading
 import asyncio
 import json
-import os
 import sys
 import websockets
 import pandas as pd
 import requests
 from datetime import datetime
-from http.server import HTTPServer, BaseHTTPRequestHandler
-import threading
+from flask import Flask
 
 # ==========================================
 # CONFIGURACIÓN DE DISCORD WEBHOOK
 # ==========================================
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1533349076593283252/QPKKfcqt0F1I0WcUEnwl5GjVsQTQYL23BvX8FOYM1p4laseCH0iDNPhdfd0VApHafggJ"
+
+sys.stdout.reconfigure(line_buffering=True)
+
+# SERVIDOR WEB CON FLASK (Para complacer a Render)
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot Kalshi-Coinbase Activo y Funcionando 24/7", 200
+
+@app.route('/health')
+def health():
+    return "OK", 200
 
 def send_discord_alert(action, price, reason, timestamp):
     if not DISCORD_WEBHOOK_URL:
@@ -48,29 +60,11 @@ def send_discord_alert(action, price, reason, timestamp):
     except Exception as e:
         print(f"[ERROR DISCORD]: {e}", flush=True)
 
-class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
-    def do_HEAD(self):
-        self.send_response(200)
-        self.send_header("Content-type", "text/html")
-        self.end_headers()
-
-    def do_GET(self):
-        self.do_HEAD()
-        self.wfile.write(b"Bot activo y analizando velas de Coinbase.")
-
-def run_http_server():
-    port = int(os.environ.get("PORT", 10000))
-    server = HTTPServer(('0.0.0.0', port), SimpleHTTPRequestHandler)
-    server.serve_forever()
-
-sys.stdout.reconfigure(line_buffering=True)
-
 COINBASE_WS = "wss://ws-feed.exchange.coinbase.com"
 candles_1m = pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 current_minute_ticks = []
 last_sent_action = ""
 
-# CARGAR HISTORIAL INICIAL DESDE REST API DE COINBASE (Para no arrancar de cero si reinicia)
 def load_initial_candles():
     global candles_1m
     try:
@@ -78,7 +72,6 @@ def load_initial_candles():
         res = requests.get(url, timeout=10)
         if res.status_code == 200:
             data = res.json()
-            # Coinbase retorna [time, low, high, open, close, volume]
             df = pd.DataFrame(data, columns=['time', 'low', 'high', 'open', 'close', 'volume'])
             df = df.iloc[::-1].reset_index(drop=True)
             df['timestamp'] = pd.to_datetime(df['time'], unit='s').dt.strftime('%H:%M:00')
@@ -105,9 +98,6 @@ def resample_candles(df, timeframe='15min'):
     
     return resampled
 
-# ==========================================
-# EVALUADOR DE MULTI-ENTRADAS + FILTRO CUOTA
-# ==========================================
 def calculate_interval_signals(df_1m):
     if len(df_1m) < 5:
         return "NEUTRAL ⚖️", "RECOLECTANDO VELAS INICIALES"
@@ -138,14 +128,12 @@ def calculate_interval_signals(df_1m):
     upper_wick = last_1m['high'] - max(last_1m['close'], last_1m['open'])
     lower_wick = min(last_1m['close'], last_1m['open']) - last_1m['low']
 
-    # --- ALERTAS DE SALIDA Y PROFIT ---
     if upper_wick > (body * 1.3) and upper_wick > 0:
         return "💰 CERRAR / TOMAR PROFIT (UP)", f"AGOTAMIENTO EN MINUTO {minute_in_interval}/15"
     
     if lower_wick > (body * 1.3) and lower_wick > 0:
         return "💰 CERRAR / TOMAR PROFIT (DOWN)", f"AGOTAMIENTO EN MINUTO {minute_in_interval}/15"
 
-    # --- LÓGICA DE FILTRADO DE CUOTAS LATE ---
     dist_5m = abs(last_1m['close'] - df_1m['open'].tail(5).iloc[0])
     if minute_in_interval >= 10 and dist_5m > 120:
         return "NEUTRAL ⚖️", f"CUOTA MUY BAJA EN KALSHI (~1.2) - MOVIMIENTO CASI EXTENDIDO"
@@ -155,7 +143,6 @@ def calculate_interval_signals(df_1m):
     green = last_1m['close'] > last_1m['open']
     red = last_1m['close'] < last_1m['open']
 
-    # Entradas en Apertura e Impulso Temprano (Cuotas 1.5 - 2.5)
     if minute_in_interval <= 3:
         if ema_bull and green:
             return "🔥 INICIO BLOQUE: COMPRAR UP 🚀", f"BUENA CUOTA (INTERVALO {interval_start_min}m)"
@@ -170,9 +157,6 @@ def calculate_interval_signals(df_1m):
 
     return "NEUTRAL ⚖️", f"SIN PATRÓN O CUOTA NO ATRACTIVA ({minute_in_interval}/15m)"
 
-# ==========================================
-# FEED COINBASE WEBSOCKET
-# ==========================================
 async def coinbase_websocket_listener():
     global candles_1m, current_minute_ticks, last_sent_action
     
@@ -235,17 +219,17 @@ async def coinbase_websocket_listener():
             print(f"[RECONECTANDO COINBASE]: {e}", flush=True)
             await asyncio.sleep(5)
 
-# ==========================================
-# BUCLE PRINCIPAL
-# ==========================================
-async def main():
-    threading.Thread(target=run_http_server, daemon=True).start()
+def start_bot_thread():
     load_initial_candles()
-    print("🚀 BOT INICIADO Y CON HISTORIAL CARGADO...", flush=True)
-    await coinbase_websocket_listener()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(coinbase_websocket_listener())
+
+# Iniciar el bot en un hilo secundario
+bot_thread = threading.Thread(target=start_bot_thread, daemon=True)
+bot_thread.start()
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("Bot detenido.", flush=True)
+    import os
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
