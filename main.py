@@ -53,7 +53,7 @@ async def set_target(ctx, valor: str = None):
         modo_manual = False
         manual_target = None
         ultima_senal_enviada = None
-        await ctx.send("🤖 **Target restablecido a MODO AUTOMÁTICO.**")
+        await ctx.send("🤖 **Target restablecido a MODO AUTOMÁTICO (Vela 15m Coinbase).**")
         print("🔄 Target cambiado a MODO AUTOMÁTICO.")
     else:
         try:
@@ -76,7 +76,7 @@ async def on_message(message):
     await bot.process_commands(message)
 
 # ==========================================
-# 4. CONSULTA DE PRECIOS Y BALLENAS
+# 4. CONSULTA DE PRECIOS, VELAS Y BALLENAS
 # ==========================================
 def obtener_precio_btc():
     """Obtiene el precio spot en tiempo real de Bitcoin en Coinbase"""
@@ -88,6 +88,23 @@ def obtener_precio_btc():
     except Exception as e:
         print(f"⚠️ Error obteniendo precio Coinbase: {e}")
     return None
+
+def obtener_target_auto():
+    """Calcula el target automático dinámico usando la vela de 15m de Coinbase"""
+    try:
+        url = "https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=900"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        response = requests.get(url, headers=headers, timeout=5)
+        
+        if response.status_code == 200:
+            candles = response.json()
+            if candles:
+                # Retorna el Apertura (Open) de la vela de 15 minutos actual
+                return float(candles[0][3])
+    except Exception as e:
+        print(f"⚠️ Error al calcular target automático: {e}")
+    
+    return obtener_precio_btc()
 
 def buscar_ballenas_binance():
     """Rastrea grandes transacciones recientes en Binance"""
@@ -106,11 +123,8 @@ def buscar_ballenas_binance():
         print(f"⚠️ Error rastreando ballenas Binance: {e}")
     return None
 
-def obtener_target_auto():
-    return 63456.97
-
 # ==========================================
-# 5. CICLO DE MONITOREO (ENTRADAS, SALIDAS Y BALLENAS)
+# 5. CICLO DE MONITOREO DUAL
 # ==========================================
 async def ciclo_monitoreo():
     await bot.wait_until_ready()
@@ -121,9 +135,7 @@ async def ciclo_monitoreo():
     while not bot.is_closed():
         try:
             if canal:
-                # --------------------------------------------------
-                # A. MONITOREO DE PRECIO, ENTRADAS Y SALIDAS
-                # --------------------------------------------------
+                # 1. Obtener precio y target dinámico
                 precio_btc = obtener_precio_btc()
 
                 if precio_btc is not None:
@@ -132,7 +144,7 @@ async def ciclo_monitoreo():
 
                     print(f"🔍 Monitoreando... BTC Coinbase: ${precio_btc:,.2f} | Target Activo: ${target_activo:,.2f}")
 
-                    # 1. CONDICIÓN DE ENTRADA (COMPRAR UP)
+                    # A. CONDICIÓN DE ENTRADA (COMPRAR UP)
                     if precio_btc > target_activo:
                         accion = "COMPRAR UP 🚀"
                         diferencia = precio_btc - target_activo
@@ -146,19 +158,18 @@ async def ciclo_monitoreo():
                             embed.add_field(name="Acción", value=f"🔥 **{accion}**", inline=False)
                             embed.add_field(name="Precio BTC (Coinbase)", value=f"${precio_btc:,.2f}", inline=True)
                             embed.add_field(name="Target a Vencer", value=f"${target_activo:,.2f}", inline=True)
-                            embed.add_field(name="Margen A favor", value=f"+${diferencia:,.2f}", inline=False)
+                            embed.add_field(name="Margen A Favor", value=f"+${diferencia:,.2f}", inline=False)
 
                             await canal.send(embed=embed)
-                            print(f"📢 Señal de Entrada enviada a Discord: {accion}")
+                            print(f"📢 Señal enviada a Discord: {accion} | Target: {target_activo}")
                             ultima_senal_enviada = identificador_senal
 
-                    # 2. CONDICIÓN DE SALIDA / STOP LOSS (Cuando cae $20 por debajo del Target)
+                    # B. CONDICIÓN DE SALIDA / STOP LOSS
                     elif precio_btc < (target_activo - 20.0):
                         accion = "SALIR / CERRAR OPERACIÓN 🛑"
                         caida = target_activo - precio_btc
                         identificador_senal = f"SALIDA_{target_activo}"
 
-                        # Solo envía alerta de salida si veníamos de una ENTRADA activa
                         if ultima_senal_enviada != identificador_senal and ultima_senal_enviada is not None and "ENTRADA" in str(ultima_senal_enviada):
                             embed = discord.Embed(
                                 title="⚠️ ALERTA DE SALIDA (INVALIDACIÓN / STOP LOSS)",
@@ -168,15 +179,12 @@ async def ciclo_monitoreo():
                             embed.add_field(name="Precio BTC Actual", value=f"${precio_btc:,.2f}", inline=True)
                             embed.add_field(name="Target de Entrada", value=f"${target_activo:,.2f}", inline=True)
                             embed.add_field(name="Caída desde Target", value=f"-${caida:,.2f}", inline=False)
-                            embed.add_field(name="Recomendación", value="Cerrar la posición para recortar pérdidas antes de un mayor retroceso.", inline=False)
 
                             await canal.send(embed=embed)
                             print(f"🛑 Alerta de Salida enviada a Discord: -${caida:,.2f}")
                             ultima_senal_enviada = identificador_senal
 
-                # --------------------------------------------------
-                # B. MONITOREO DE BALLENAS (BINANCE / COINBASE)
-                # --------------------------------------------------
+                # 2. MONITOREO DE BALLENAS
                 ballena = buscar_ballenas_binance()
                 if ballena:
                     monto_usd = ballena["monto"] * ballena["precio"]
@@ -197,7 +205,6 @@ async def ciclo_monitoreo():
         except Exception as e:
             print(f"⚠️ Error en ciclo de monitoreo: {e}")
 
-        # Frecuencia de escaneo
         await asyncio.sleep(15)
 
 # ==========================================
