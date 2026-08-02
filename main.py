@@ -6,7 +6,7 @@ from datetime import datetime
 import os
 from flask import Flask
 
-# Servidor Flask mínimo para mantener vivo el Web Service en Render
+# Servidor Flask para mantener el Web Service activo en Render
 app = Flask(__name__)
 
 @app.route('/')
@@ -14,18 +14,18 @@ def health_check():
     return "OK - Bot Kalshi Activo", 200
 
 # ------------------------------------------
-# CONFIGURACIÓN DE DISCORD WEBHOOK
+# CONFIGURACIÓN DE DISCORD WEBHOOK (ACTUALIZADA)
 # ------------------------------------------
-DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1533349076593283252/QPKKfcqt0F1I0WcUEnwl5GjVsQTQYL23BvX8FOYM1p4laseCH0iDNPhdfd0VApHafggJ"
+DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1533385616140664992/k-Ibnna6ZiHxiP0qhR2Ol-aBwavpOUezSCL4jYcT4HE_non4BHCz7vW0Xsc1_8WMYfqU"
 
 last_sent_action = ""
 
 def send_discord_alert(action, price, reason, timestamp):
     if not DISCORD_WEBHOOK_URL:
-        print("[DISCORD] ERROR: URL de webhook no encontrada.", flush=True)
+        print("[DISCORD] ERROR: URL de Webhook no configurada.", flush=True)
         return
 
-    # Definir colores según el tipo de acción
+    # Selección de color según el tipo de acción
     color = 0x3498DB # Azul por defecto
     if "COMPRAR UP" in action or "CONECTADO" in action:
         color = 0x2ECC71 # Verde
@@ -34,9 +34,9 @@ def send_discord_alert(action, price, reason, timestamp):
     elif "PROFIT" in action or "CERRAR" in action:
         color = 0xF1C40F # Amarillo
 
-    # Estructura del Embed para Discord
+    # Payload para la API de Discord
     payload = {
-        "username": "Bot Kalshi Signals",
+        "username": "Captain Hook",
         "embeds": [{
             "title": "🚨 SEÑAL KALSHI BTC 15M",
             "color": color,
@@ -85,13 +85,13 @@ def evaluate_signals(df_1m):
     now = datetime.now()
     min_in_15 = now.minute % 15
 
-    # Indicadores Técnicos
+    # Cálculo de EMAs
     df_1m['ema9'] = df_1m['close'].ewm(span=9, adjust=False).mean()
     df_1m['ema21'] = df_1m['close'].ewm(span=21, adjust=False).mean()
 
     last = df_1m.iloc[-1]
 
-    # Detección de mechas para salida/take profit
+    # Evaluación de mechas
     body = abs(last['close'] - last['open'])
     upper_wick = last['high'] - max(last['close'], last['open'])
     lower_wick = min(last['close'], last['open']) - last['low']
@@ -101,7 +101,7 @@ def evaluate_signals(df_1m):
     if lower_wick > (body * 1.3) and lower_wick > 0:
         return "💰 CERRAR / PROFIT (DOWN)", f"Rechazo alcista en min {min_in_15}/15"
 
-    # Bloqueo final del bloque (minutos 13 y 14)
+    # Bloqueo en minutos finales de la vela de 15m
     if min_in_15 >= 13:
         return "NEUTRAL ⚖️", f"Final de bloque ({min_in_15}/15m) - Cuota baja"
 
@@ -127,7 +127,7 @@ def bot_loop():
     global last_sent_action
     print("🚀 Bot iniciado con éxito.", flush=True)
     
-    # 1. Notificación inicial de confirmación (Corregida con los 4 parámetros)
+    # 1. Alerta de inicio con 4 argumentos exactos
     send_discord_alert(
         "🟢 BOT CONECTADO", 
         0, 
@@ -135,7 +135,7 @@ def bot_loop():
         datetime.now().strftime('%H:%M:%S')
     )
 
-    # 2. Bucle continuo de monitoreo
+    # 2. Bucle principal
     while True:
         try:
             df = fetch_candles()
@@ -148,7 +148,6 @@ def bot_loop():
                 
                 print(f"[{t_stamp}] BTC: ${close_p:,.2f} | ACCIÓN: {action} ({reason})", flush=True)
 
-                # Envío de alertas si hay cambio de señal válida
                 if "COMPRAR" in action or "CERRAR" in action or "PROFIT" in action:
                     if action != last_sent_action:
                         send_discord_alert(action, close_p, reason, t_stamp)
@@ -160,10 +159,8 @@ def bot_loop():
         time.sleep(30)
 
 if __name__ == "__main__":
-    # Arrancar el bot en un hilo secundario
     t = threading.Thread(target=bot_loop, daemon=True)
     t.start()
 
-    # Arrancar el servidor Flask para Render
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
