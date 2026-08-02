@@ -224,6 +224,5 @@ def main():
             print(f"❌ ERROR EN BUCLE PRINCIPAL: {e}")
 
        time.sleep(POLL_INTERVAL)
-
 if __name__ == "__main__":
     main()
