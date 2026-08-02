@@ -35,7 +35,7 @@ def send_discord_alert(action, price, reason, timestamp):
         return
     
     color = 0x3498DB
-    if "COMPRAR UP" in action:
+    if "COMPRAR UP" in action or "INICIO" in action:
         color = 0x2ECC71
     elif "COMPRAR DOWN" in action:
         color = 0xE74C3C
@@ -43,7 +43,7 @@ def send_discord_alert(action, price, reason, timestamp):
         color = 0xF1C40F
 
     embed = {
-        "title": "🚨 ALERTA KALSHI BTC (FILTRO DE CUOTA ACTIVO)",
+        "title": "🚨 SEÑAL KALSHI BTC (DINÁMICA 15M)",
         "color": color,
         "fields": [
             {"name": "Acción", "value": f"**{action}**", "inline": False},
@@ -51,7 +51,7 @@ def send_discord_alert(action, price, reason, timestamp):
             {"name": "Hora", "value": timestamp, "inline": True},
             {"name": "Detalle / Motivo", "value": reason, "inline": False}
         ],
-        "footer": {"text": "Bot Estratégico 15m / Excluye Cuotas Bajas (<1.4)"}
+        "footer": {"text": "Bot Multiopero 15m | Entradas continuas Min 0-12"}
     }
 
     payload = {
@@ -87,24 +87,6 @@ def load_initial_candles():
     except Exception as e:
         print(f"[WARN] No se pudo cargar historial previo: {e}", flush=True)
 
-def resample_candles(df, timeframe='15min'):
-    if df.empty or len(df) < 5:
-        return pd.DataFrame()
-    
-    df_copy = df.copy()
-    df_copy['datetime'] = pd.to_datetime(df_copy['timestamp'], format='%H:%M:%S')
-    df_copy.set_index('datetime', inplace=True)
-    
-    resampled = df_copy.resample(timeframe).agg({
-        'open': 'first',
-        'high': 'max',
-        'low': 'min',
-        'close': 'last',
-        'volume': 'sum'
-    }).dropna()
-    
-    return resampled
-
 def calculate_interval_signals(df_1m):
     if len(df_1m) < 5:
         return "NEUTRAL ⚖️", "RECOLECTANDO VELAS INICIALES"
@@ -114,55 +96,51 @@ def calculate_interval_signals(df_1m):
     interval_start_min = (minute_of_hour // 15) * 15
     minute_in_interval = minute_of_hour - interval_start_min
 
-    df_15m = resample_candles(df_1m, '15min')
-
+    # Cálculo de EMAs de reacción rápida
     df_1m['ema9'] = df_1m['close'].ewm(span=9, adjust=False).mean()
     df_1m['ema21'] = df_1m['close'].ewm(span=21, adjust=False).mean()
     
     last_1m = df_1m.iloc[-1]
-    
-    trend_15m = "NEUTRAL"
-    if not df_15m.empty and len(df_15m) >= 2:
-        df_15m['ema9'] = df_15m['close'].ewm(span=9, adjust=False).mean()
-        df_15m['ema21'] = df_15m['close'].ewm(span=21, adjust=False).mean()
-        last_15m = df_15m.iloc[-1]
-        if last_15m['ema9'] > last_15m['ema21']:
-            trend_15m = "ALCISTA"
-        elif last_15m['ema9'] < last_15m['ema21']:
-            trend_15m = "BAJISTA"
+    prev_1m = df_1m.iloc[-2]
 
+    # Medición de cuerpo y mechas
     body = abs(last_1m['close'] - last_1m['open'])
     upper_wick = last_1m['high'] - max(last_1m['close'], last_1m['open'])
     lower_wick = min(last_1m['close'], last_1m['open']) - last_1m['low']
 
-    if upper_wick > (body * 1.3) and upper_wick > 0:
-        return "💰 CERRAR / TOMAR PROFIT (UP)", f"AGOTAMIENTO EN MINUTO {minute_in_interval}/15"
+    # 1. ALERTAS DE CIERRE Y TOMAR GANANCIA (En cualquier minuto)
+    if upper_wick > (body * 1.4) and upper_wick > 0:
+        return "💰 CERRAR / TOMAR PROFIT (UP)", f"Rechazo bajista (Mecha superior) en min {minute_in_interval}/15"
     
-    if lower_wick > (body * 1.3) and lower_wick > 0:
-        return "💰 CERRAR / TOMAR PROFIT (DOWN)", f"AGOTAMIENTO EN MINUTO {minute_in_interval}/15"
+    if lower_wick > (body * 1.4) and lower_wick > 0:
+        return "💰 CERRAR / TOMAR PROFIT (DOWN)", f"Rechazo alcista (Mecha inferior) en min {minute_in_interval}/15"
 
-    dist_5m = abs(last_1m['close'] - df_1m['open'].tail(5).iloc[0])
-    if minute_in_interval >= 10 and dist_5m > 120:
-        return "NEUTRAL ⚖️", f"CUOTA MUY BAJA EN KALSHI (~1.2) - MOVIMIENTO CASI EXTENDIDO"
+    # 2. BLOQUEO FINAL DE CUOTAS (Últimos 2 minutos del bloque de 15m)
+    if minute_in_interval >= 13:
+        return "NEUTRAL ⚖️", f"CIERRE DE BLOQUE ({minute_in_interval}/15m) - Cuotas extremadamente bajas en Kalshi"
 
+    # 3. CONDICIONES TÉCNICAS
     ema_bull = last_1m['ema9'] > last_1m['ema21']
     ema_bear = last_1m['ema9'] < last_1m['ema21']
     green = last_1m['close'] > last_1m['open']
     red = last_1m['close'] < last_1m['open']
+    momentum_up = last_1m['close'] > prev_1m['close']
+    momentum_down = last_1m['close'] < prev_1m['close']
 
+    # 4. ENTRADAS Y MULTI-OPERACIONES (Minutos 0 a 12)
     if minute_in_interval <= 3:
         if ema_bull and green:
-            return "🔥 INICIO BLOQUE: COMPRAR UP 🚀", f"BUENA CUOTA (INTERVALO {interval_start_min}m)"
+            return "🔥 ENTRADA PRINCIPAL: COMPRAR UP 🚀", f"Inicio de bloque ({minute_in_interval}m/15m) - Cuota óptima"
         elif ema_bear and red:
-            return "🔥 INICIO BLOQUE: COMPRAR DOWN 📉", f"BUENA CUOTA (INTERVALO {interval_start_min}m)"
+            return "🔥 ENTRADA PRINCIPAL: COMPRAR DOWN 📉", f"Inicio de bloque ({minute_in_interval}m/15m) - Cuota óptima"
 
-    elif 4 <= minute_in_interval <= 9:
-        if ema_bull and green and trend_15m == "ALCISTA":
-            return "⚡ RE-ENTRADA: COMPRAR UP 🚀", f"CUOTA ACEPTABLE ({minute_in_interval}m)"
-        elif ema_bear and red and trend_15m == "BAJISTA":
-            return "⚡ RE-ENTRADA: COMPRAR DOWN 📉", f"CUOTA ACEPTABLE ({minute_in_interval}m)"
+    elif 4 <= minute_in_interval <= 12:
+        if ema_bull and green and momentum_up:
+            return f"⚡ RE-ENTRADA #{minute_in_interval}: COMPRAR UP 🚀", f"Impulso continuo en min {minute_in_interval}/15"
+        elif ema_bear and red and momentum_down:
+            return f"⚡ RE-ENTRADA #{minute_in_interval}: COMPRAR DOWN 📉", f"Impulso continuo en min {minute_in_interval}/15"
 
-    return "NEUTRAL ⚖️", f"SIN PATRÓN O CUOTA NO ATRACTIVA ({minute_in_interval}/15m)"
+    return "NEUTRAL ⚖️", f"Consolidando / Sin impulso claro ({minute_in_interval}/15m)"
 
 async def coinbase_websocket_listener():
     global candles_1m, current_minute_ticks, last_sent_action
@@ -177,7 +155,7 @@ async def coinbase_websocket_listener():
         try:
             async with websockets.connect(COINBASE_WS) as ws:
                 await ws.send(json.dumps(subscribe_msg))
-                print("🟢 Conectado a Coinbase Feed. Esperando datos...", flush=True)
+                print("🟢 Conectado a Coinbase Feed. Procesando ticks...", flush=True)
                 
                 last_minute = datetime.now().minute
                 
@@ -213,14 +191,12 @@ async def coinbase_websocket_listener():
                                 
                                 print(f"[{t_stamp}] BTC Kalshi: ${close_p:,.2f} | ACCIÓN: {action} ({reason})", flush=True)
 
-                                if "COMPRAR" in action or "CERRAR" in action or "PROFIT" in action:
+                                if "COMPRAR" in action or "CERRAR" in action or "PROFIT" in action or "ENTRADA" in action:
                                     if action != last_sent_action:
                                         send_discord_alert(action, close_p, reason, t_stamp)
                                         last_sent_action = action
 
                                 current_minute_ticks = []
-                            else:
-                                print(f"[{datetime.now().strftime('%H:%M:%S')}] Cambio de minuto detectado pero no hubo ticks recolectados.", flush=True)
                             
                             last_minute = now.minute
 
