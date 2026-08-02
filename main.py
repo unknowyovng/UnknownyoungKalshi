@@ -10,7 +10,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
 # ==========================================
-# CONFIGURACIÓN DE DISCORD WEBHOOK (INTEGRADO)
+# CONFIGURACIÓN DE DISCORD WEBHOOK
 # ==========================================
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1533349076593283252/QPKKfcqt0F1I0WcUEnwl5GjVsQTQYL23BvX8FOYM1p4laseCH0iDNPhdfd0VApHafggJ"
 
@@ -56,7 +56,7 @@ class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         self.do_HEAD()
-        self.wfile.write(b"Bot activo en Modo Filtro de Cuotas (15m/Kalshi).")
+        self.wfile.write(b"Bot activo y analizando velas de Coinbase.")
 
 def run_http_server():
     port = int(os.environ.get("PORT", 10000))
@@ -70,8 +70,25 @@ candles_1m = pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 
 current_minute_ticks = []
 last_sent_action = ""
 
+# CARGAR HISTORIAL INICIAL DESDE REST API DE COINBASE (Para no arrancar de cero si reinicia)
+def load_initial_candles():
+    global candles_1m
+    try:
+        url = "https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=60"
+        res = requests.get(url, timeout=10)
+        if res.status_code == 200:
+            data = res.json()
+            # Coinbase retorna [time, low, high, open, close, volume]
+            df = pd.DataFrame(data, columns=['time', 'low', 'high', 'open', 'close', 'volume'])
+            df = df.iloc[::-1].reset_index(drop=True)
+            df['timestamp'] = pd.to_datetime(df['time'], unit='s').dt.strftime('%H:%M:00')
+            candles_1m = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']].tail(30)
+            print("✅ Historial inicial de 30 velas cargado exitosamente.", flush=True)
+    except Exception as e:
+        print(f"[WARN] No se pudo cargar historial previo: {e}", flush=True)
+
 def resample_candles(df, timeframe='15min'):
-    if df.empty or len(df) < 15:
+    if df.empty or len(df) < 5:
         return pd.DataFrame()
     
     df_copy = df.copy()
@@ -123,13 +140,12 @@ def calculate_interval_signals(df_1m):
 
     # --- ALERTAS DE SALIDA Y PROFIT ---
     if upper_wick > (body * 1.3) and upper_wick > 0:
-        return "💰 CERRAR / TOMAR PROFIT (UP)", f"AGOTAMIENTO EN MINUTO {minute_in_interval}/15 DE BLOQUE"
+        return "💰 CERRAR / TOMAR PROFIT (UP)", f"AGOTAMIENTO EN MINUTO {minute_in_interval}/15"
     
     if lower_wick > (body * 1.3) and lower_wick > 0:
-        return "💰 CERRAR / TOMAR PROFIT (DOWN)", f"AGOTAMIENTO EN MINUTO {minute_in_interval}/15 DE BLOQUE"
+        return "💰 CERRAR / TOMAR PROFIT (DOWN)", f"AGOTAMIENTO EN MINUTO {minute_in_interval}/15"
 
-    # --- LÓGICA DE FILTRADO DE CUOTAS LATE (Riesgo / Beneficio Malo) ---
-    # Si llevamos más de 10 minutos y la vela es extremadamente grande, la cuota en Kalshi será ~1.1 - 1.2
+    # --- LÓGICA DE FILTRADO DE CUOTAS LATE ---
     dist_5m = abs(last_1m['close'] - df_1m['open'].tail(5).iloc[0])
     if minute_in_interval >= 10 and dist_5m > 120:
         return "NEUTRAL ⚖️", f"CUOTA MUY BAJA EN KALSHI (~1.2) - MOVIMIENTO CASI EXTENDIDO"
@@ -139,7 +155,7 @@ def calculate_interval_signals(df_1m):
     green = last_1m['close'] > last_1m['open']
     red = last_1m['close'] < last_1m['open']
 
-    # Entradas en Apertura e Impulso Temprano (Cuotas Ricas 1.5 - 2.5)
+    # Entradas en Apertura e Impulso Temprano (Cuotas 1.5 - 2.5)
     if minute_in_interval <= 3:
         if ema_bull and green:
             return "🔥 INICIO BLOQUE: COMPRAR UP 🚀", f"BUENA CUOTA (INTERVALO {interval_start_min}m)"
@@ -170,7 +186,7 @@ async def coinbase_websocket_listener():
         try:
             async with websockets.connect(COINBASE_WS) as ws:
                 await ws.send(json.dumps(subscribe_msg))
-                print("🟢 Conectado a Coinbase con Filtro de Cuotas...", flush=True)
+                print("🟢 Conectado a Coinbase Feed...", flush=True)
                 
                 last_minute = datetime.now().minute
                 
@@ -224,7 +240,8 @@ async def coinbase_websocket_listener():
 # ==========================================
 async def main():
     threading.Thread(target=run_http_server, daemon=True).start()
-    print("🚀 BOT CON FILTRO DE CUOTAS INICIADO...", flush=True)
+    load_initial_candles()
+    print("🚀 BOT INICIADO Y CON HISTORIAL CARGADO...", flush=True)
     await coinbase_websocket_listener()
 
 if __name__ == "__main__":
