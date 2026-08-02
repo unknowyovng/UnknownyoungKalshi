@@ -102,36 +102,35 @@ def main():
             if btc_price is not None:
                 # Fijar Target al inicio de cada vela de 15m o en un reinicio
                 if candle_block != last_candle_block or current_target_price is None:
-                    try:
-                        # Si estamos en los primeros segundos del minuto 0, esperamos un momento para que Coinbase consolide el trade
-                        if current_minute == 0:
-                            time.sleep(4)
-
-                        # Calcular Timestamp exacto del inicio del bloque de 15m actual
-                        block_start_dt = now.replace(minute=(candle_block * 15), second=0, microsecond=0)
-                        block_start_ts = int(block_start_dt.timestamp())
-
-                        # Consultar historial de velas de 1 minuto
-                        candles_url = "https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=60"
-                        c_res = requests.get(candles_url, timeout=5).json()
-
-                        if isinstance(c_res, list) and len(c_res) > 0:
-                            # Buscar la vela que coincide exactamente con el timestamp de inicio del bloque (:00:00)
-                            target_candle = next((c for c in c_res if c[0] == block_start_ts), None)
-                            
-                            if target_candle:
-                                current_target_price = float(target_candle[3])  # Open price exacto de la vela :00
-                            else:
-                                current_target_price = float(c_res[0][3])
-                        else:
-                            current_target_price = btc_price
-                    except Exception as e:
-                        print(f"⚠️ No se pudo obtener vela de apertura, usando precio actual: {e}")
+                    # CASO 1: Inicio exacto de la vela (minuto 0) -> Tomar precio spot en vivo al instante
+                    if current_minute == 0 and candle_block != last_candle_block:
                         current_target_price = btc_price
+                        print(f"📌 [TARGET EN VIVO FIJADO]: ${current_target_price:.2f} para bloque {candle_block * 15}m")
+                    else:
+                        # CASO 2: Reinicio a mitad de bloque -> Buscar el Open exacto del timestamp :00:00
+                        try:
+                            block_start_dt = now.replace(minute=(candle_block * 15), second=0, microsecond=0)
+                            block_start_ts = int(block_start_dt.timestamp())
+
+                            candles_url = "https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=60"
+                            c_res = requests.get(candles_url, timeout=5).json()
+
+                            if isinstance(c_res, list) and len(c_res) > 0:
+                                target_candle = next((c for c in c_res if c[0] == block_start_ts), None)
+                                if target_candle:
+                                    current_target_price = float(target_candle[3])
+                                else:
+                                    current_target_price = float(c_res[0][3])
+                            else:
+                                current_target_price = btc_price
+                        except Exception as e:
+                            print(f"⚠️ No se pudo obtener vela de apertura, usando precio actual: {e}")
+                            current_target_price = btc_price
+                        
+                        print(f"📌 [TARGET HISTÓRICO FIJADO]: ${current_target_price:.2f} para bloque {candle_block * 15}m")
 
                     last_candle_block = candle_block
                     last_sent_action = "NEUTRAL"
-                    print(f"📌 [TARGET EXACTO BUSCADO Y FIJADO]: ${current_target_price:.2f} para bloque {candle_block * 15}m")
 
                 # Evaluar mercado
                 action, detail = evaluate_market(btc_price, current_target_price, current_minute)
