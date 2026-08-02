@@ -219,10 +219,10 @@ def main():
                     )
                     send_discord_alert(msg)
                     last_sent_action = action
-
-        except Exception as e:
-            print(f"❌ ERROR EN BUCLE PRINCIPAL: {e}")
-
-       time.sleep(POLL_INTERVAL)
+                    
+except Exception as e:
+        print(f"❌ ERROR EN BUCLE PRINCIPAL: {e}")
+        time.sleep(POLL_INTERVAL)
 if __name__ == "__main__":
-    main()
+        main()
+
