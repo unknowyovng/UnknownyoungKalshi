@@ -8,11 +8,12 @@ import threading
 # Configuración de Discord Webhook desde variables de entorno
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 
-# Frecuencia ultra-rápida (cada 3 segundos) para capturar el contrato a bajo precio
+# Frecuencia ultra-rápida (cada 3 segundos) para monitoreo continuo
 POLL_INTERVAL = 3  
 
 # Variables globales para control de estado
 last_sent_action = "NEUTRAL"
+last_sniper_action = "NONE"
 current_target_price = None
 last_candle_block = None
 
@@ -112,13 +113,54 @@ def fetch_candle_open_price(candle_block, now):
 
 def evaluate_market(current_price, target_price, current_minute):
     """
-    Evaluación instantánea con gatillo de $5.00:
-    Permite entrar al inicio del movimiento cuando los contratos en Kalshi aún están baratos.
+    Evaluación dual:
+    1. Señal estándar de entrada temprana.
+    2. Detección de oportunidades Sniper Reversal (x5 a x20+).
     """
+    global last_sniper_action
+
     diff = current_price - target_price
     abs_diff = abs(diff)
 
-    # Gatillo ultra-sensible de $5.00 para la entrada temprana
+    # 🎯 DETECCIÓN SNIPER REVERSAL (x5 - x20)
+    # Si estamos en minutos avanzados (min 7 a 13) y ocurre un cruce fuerte en el sentido contrario
+    if 7 <= current_minute <= 13:
+        if diff >= 8.0 and last_sent_action == "COMPRAR DOWN":
+            # Estaba marcando DOWN y de repente cruzó hacia arriba: Oportunidad UP baratísima
+            if last_sniper_action != "SNIPE_UP":
+                last_sniper_action = "SNIPE_UP"
+                msg_sniper = (
+                    f"⚡ **¡ALERTA SNIPER REVERSAL (x5 - x20)!** ⚡\n"
+                    f"🔥 **COMPRAR UP DE EMERGENCIA / GIRO RAPIDO**\n"
+                    f"**Precio BTC:** ${current_price:.2f}\n"
+                    f"**Target:** ${target_price:.2f}\n"
+                    f"**Desviación:** +${diff:.2f}\n"
+                    f"💰 *El contrato UP debe estar cotizando extremadamente barato (3¢ - 15¢).* "
+                    f"Potencial de retorno masivo si se sostiene."
+                )
+                send_discord_alert(msg_sniper)
+
+        elif diff <= -8.0 and last_sent_action == "COMPRAR UP":
+            # Estaba marcando UP y de repente cruzó hacia abajo: Oportunidad DOWN baratísima
+            if last_sniper_action != "SNIPE_DOWN":
+                last_sniper_action = "SNIPE_DOWN"
+                msg_sniper = (
+                    f"⚡ **¡ALERTA SNIPER REVERSAL (x5 - x20)!** ⚡\n"
+                    f"🔥 **COMPRAR DOWN DE EMERGENCIA / GIRO RAPIDO**\n"
+                    f"**Precio BTC:** ${current_price:.2f}\n"
+                    f"**Target:** ${target_price:.2f}\n"
+                    f"**Desviación:** -${abs_diff:.2f}\n"
+                    f"💰 *El contrato DOWN debe estar cotizando extremadamente barato (3¢ - 15¢).* "
+                    f"Potencial de retorno masivo si se sostiene."
+                )
+                send_discord_alert(msg_sniper)
+
+    # PROTECCIÓN DE CIERRE (Minutos 13 y 14)
+    if current_minute >= 13:
+        if abs_diff < 15.0:
+            return "NEUTRAL", f"⚠️ ZONA DE RIESGO DE LATIGAZO (Cierre ajustado: ${diff:+.2f}) | min {current_minute}/15"
+
+    # GATILLO SENSIBLE DE ENTRADA TEMPRANA
     if diff >= 5.0:
         return "COMPRAR UP", f"⚡ Entrada Temprana (+${diff:.2f} sobre Target) | min {current_minute}/15"
     elif diff <= -5.0:
@@ -128,13 +170,13 @@ def evaluate_market(current_price, target_price, current_minute):
 
 
 def main():
-    global last_sent_action, current_target_price, last_candle_block
+    global last_sent_action, last_sniper_action, current_target_price, last_candle_block
 
     # Iniciar servidor web dummy para Render
     threading.Thread(target=run_dummy_server, daemon=True).start()
 
-    print("🚀 Bot Kalshi 15m iniciado con respuesta rápida (3s).")
-    send_discord_alert("🟢 **BOT CONECTADO**\nMotor optimizado para entradas tempranas de alto margen.")
+    print("🚀 Bot Kalshi 15m iniciado con detector Sniper Reversal (x5 - x20).")
+    send_discord_alert("🟢 **BOT CONECTADO**\nMotor configurado con alertas Sniper Reversal de alto multiplicador.")
 
     while True:
         try:
@@ -166,6 +208,7 @@ def main():
 
                     last_candle_block = candle_block
                     last_sent_action = "NEUTRAL"
+                    last_sniper_action = "NONE"
 
                 # Evaluar mercado
                 action, detail = evaluate_market(btc_price, current_target_price, current_minute)
