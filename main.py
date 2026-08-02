@@ -55,40 +55,22 @@ def get_btc_price():
         return None
 
 
-def fetch_exact_target(now, candle_block, is_block_start):
-    """Busca el Target exacto probando Coinbase Spot Ticker y Velas Históricas."""
-    # Si estamos justo al inicio de bloque (:00, :15, :30, :45), la prioridad es el primer ticker
-    if is_block_start:
-        for _ in range(3):
-            price = get_btc_price()
-            if price is not None:
-                return price, "TICKER EN VIVO (:00)"
-            time.sleep(1)
-
-    # Si es a mitad de bloque (reinicio), buscamos la vela del inicio del bloque
+def get_kalshi_official_target():
+    """Consulta la API pública de Kalshi para obtener el 'strike' o Target de la vela activa."""
     try:
-        block_start_dt = now.replace(minute=(candle_block * 15), second=0, microsecond=0)
-        block_start_ts = int(block_start_dt.timestamp())
-
-        candles_url = "https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=60"
-        c_res = requests.get(candles_url, timeout=5).json()
-
-        if isinstance(c_res, list) and len(c_res) > 0:
-            # Buscar la vela cuya hora de inicio corresponda al inicio de bloque
-            target_candle = next((c for c in c_res if c[0] == block_start_ts), None)
-            if target_candle:
-                return float(target_candle[3]), "HISTÓRICO DE VELA (:00)"
-            
-            # Si es muy reciente y no ha generado la vela exacta, tomar la más cercana al bloque
-            for candle in c_res:
-                if candle[0] <= block_start_ts:
-                    return float(candle[3]), "VELA HISTÓRICA CERCANA"
+        url = "https://api.elections.kalshi.com/trade-api/v2/markets?series_ticker=KXBTC15M&limit=5"
+        res = requests.get(url, timeout=5).json()
+        markets = res.get("markets", [])
+        
+        for m in markets:
+            # Buscar el mercado que esté 'active' o 'open'
+            if m.get("status") in ["active", "open"]:
+                strike = m.get("floor_strike") or m.get("cap_strike") or m.get("strike_price")
+                if strike is not None:
+                    return float(strike)
     except Exception as e:
-        print(f"⚠️ Error al consultar velas históricas: {e}")
-
-    # Respaldo final si falla lo demás
-    spot = get_btc_price()
-    return spot, "SPOT RESPALDO"
+        print(f"⚠️ Error consultando Kalshi directo: {e}")
+    return None
 
 
 def evaluate_market(current_price, target_price, current_minute):
@@ -132,23 +114,25 @@ def main():
             now = datetime.now(timezone.utc)
             current_minute = now.minute % 15
             candle_block = now.minute // 15
-            is_block_start = (current_minute == 0 and now.second < 20)
 
             btc_price = get_btc_price()
 
             if btc_price is not None:
-                # Fijar Target al inicio de cada vela de 15m o si no hay Target guardado
+                # Fijar Target al cambiar de vela (cada 15m) o si el bot recién enciende
                 if candle_block != last_candle_block or current_target_price is None:
-                    target_val, source_info = fetch_exact_target(now, candle_block, is_block_start)
-                    
-                    if target_val is not None:
-                        current_target_price = target_val
+                    # Intento prioritario: Target directo de la API Kalshi
+                    target_k = get_kalshi_official_target()
+
+                    if target_k is not None:
+                        current_target_price = target_k
+                        print(f"📌 [TARGET KALSHI COMPROBADO]: ${current_target_price:.2f} (Bloque {candle_block * 15}m)")
                     else:
+                        # Si Kalshi no responde, usamos el precio spot de apertura instantáneo
                         current_target_price = btc_price
+                        print(f"📌 [TARGET SPOT INICIAL FIJADO]: ${current_target_price:.2f} (Bloque {candle_block * 15}m)")
 
                     last_candle_block = candle_block
                     last_sent_action = "NEUTRAL"
-                    print(f"📌 [TARGET FIJADO - {source_info}]: ${current_target_price:.2f} para bloque {candle_block * 15}m")
 
                 # Evaluar mercado
                 action, detail = evaluate_market(btc_price, current_target_price, current_minute)
