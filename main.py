@@ -2,7 +2,7 @@ import os
 import asyncio
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
-import requests
+import aiohttp
 import discord
 from discord.ext import commands
 
@@ -14,6 +14,10 @@ class DummyHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"OK")
+
+    def log_message(self, format, *args):
+        # Desactiva logs HTTP innecesarios para ahorrar espacio en consola
+        return
 
 def run_dummy_server():
     port = int(os.environ.get("PORT", 10000))
@@ -45,7 +49,7 @@ async def set_target(ctx, valor: str = None):
     global manual_target, modo_manual, ultima_senal_enviada
 
     if valor is None:
-        estado = f"🎯 Target actual: ${manual_target:.2f}" if modo_manual else "🤖 Modo: AUTOMÁTICO (15m)"
+        estado = f"🎯 Target actual: ${manual_target:.2f}" if modo_manual else "🤖 Modo: AUTOMÁTICO (Vela 15m)"
         await ctx.send(f"ℹ️ {estado}\nUsa `!target <precio>` o `!target auto` para cambiarlo.")
         return
 
@@ -76,55 +80,53 @@ async def on_message(message):
     await bot.process_commands(message)
 
 # ==========================================
-# 4. CONSULTA DE PRECIOS, VELAS Y BALLENAS
+# 4. CONSULTAS ASÍNCRONAS DE ALTA VELOCIDAD
 # ==========================================
-def obtener_precio_btc():
+async def obtener_precio_btc(session):
     """Obtiene el precio spot en tiempo real de Bitcoin en Coinbase"""
+    url = "https://api.coinbase.com/v2/prices/BTC-USD/spot"
     try:
-        url = "https://api.coinbase.com/v2/prices/BTC-USD/spot"
-        response = requests.get(url, timeout=5)
-        if response.status_code == 200:
-            return float(response.json()["data"]["amount"])
-    except Exception as e:
-        print(f"⚠️ Error obteniendo precio Coinbase: {e}")
+        async with session.get(url, timeout=3) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                return float(data["data"]["amount"])
+    except Exception:
+        pass
     return None
 
-def obtener_target_auto():
-    """Calcula el target automático dinámico usando la vela de 15m de Coinbase"""
+async def obtener_target_auto(session):
+    """Calcula el target automático usando la vela de 15m de Coinbase"""
+    url = "https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=900"
+    headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        url = "https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=900"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        response = requests.get(url, headers=headers, timeout=5)
-        
-        if response.status_code == 200:
-            candles = response.json()
-            if candles:
-                # Retorna el Apertura (Open) de la vela de 15 minutos actual
-                return float(candles[0][3])
-    except Exception as e:
-        print(f"⚠️ Error al calcular target automático: {e}")
-    
-    return obtener_precio_btc()
+        async with session.get(url, headers=headers, timeout=3) as resp:
+            if resp.status == 200:
+                candles = await resp.json()
+                if candles:
+                    return float(candles[0][3]) # Precio de Apertura (Open)
+    except Exception:
+        pass
+    return None
 
-def buscar_ballenas_binance():
+async def buscar_ballenas_binance(session):
     """Rastrea grandes transacciones recientes en Binance"""
+    url = "https://api.binance.com/api/v3/trades?symbol=BTCUSDT&limit=10"
     try:
-        url = "https://api.binance.com/api/v3/trades?symbol=BTCUSDT&limit=10"
-        response = requests.get(url, timeout=5)
-        if response.status_code == 200:
-            trades = response.json()
-            for t in trades:
-                qty = float(t["qty"])
-                if qty >= UMBRAL_BALLENA_BTC:
-                    precio = float(t["price"])
-                    tipo = "VENTA 🔴" if t["isBuyerMaker"] else "COMPRA 🟢"
-                    return {"monto": qty, "precio": precio, "tipo": tipo, "exchange": "Binance"}
-    except Exception as e:
-        print(f"⚠️ Error rastreando ballenas Binance: {e}")
+        async with session.get(url, timeout=3) as resp:
+            if resp.status == 200:
+                trades = await resp.json()
+                for t in trades:
+                    qty = float(t["qty"])
+                    if qty >= UMBRAL_BALLENA_BTC:
+                        precio = float(t["price"])
+                        tipo = "VENTA 🔴" if t["isBuyerMaker"] else "COMPRA 🟢"
+                        return {"monto": qty, "precio": precio, "tipo": tipo, "exchange": "Binance"}
+    except Exception:
+        pass
     return None
 
 # ==========================================
-# 5. CICLO DE MONITOREO DUAL
+# 5. CICLO DE MONITOREO ULTRA RÁPIDO (3s)
 # ==========================================
 async def ciclo_monitoreo():
     await bot.wait_until_ready()
@@ -132,80 +134,83 @@ async def ciclo_monitoreo():
     
     canal = discord.utils.get(bot.get_all_channels(), name="alertas-kalshi")
 
-    while not bot.is_closed():
-        try:
-            if canal:
-                # 1. Obtener precio y target dinámico
-                precio_btc = obtener_precio_btc()
+    # Mantiene la sesión HTTP abierta para máxima velocidad de conexión (reutiliza sockets)
+    async with aiohttp.ClientSession() as session:
+        while not bot.is_closed():
+            try:
+                if canal:
+                    # Ejecutar consultas de precio y target
+                    precio_btc = await obtener_precio_btc(session)
 
-                if precio_btc is not None:
-                    target_calculado_auto = obtener_target_auto()
-                    target_activo = manual_target if modo_manual and manual_target else target_calculado_auto
+                    if precio_btc is not None:
+                        target_calculado_auto = await obtener_target_auto(session)
+                        target_activo = manual_target if modo_manual and manual_target else (target_calculado_auto or precio_btc)
 
-                    print(f"🔍 Monitoreando... BTC Coinbase: ${precio_btc:,.2f} | Target Activo: ${target_activo:,.2f}")
+                        print(f"🔍 Monitoreando... BTC Coinbase: ${precio_btc:,.2f} | Target Activo: ${target_activo:,.2f}")
 
-                    # A. CONDICIÓN DE ENTRADA (COMPRAR UP)
-                    if precio_btc > target_activo:
-                        accion = "COMPRAR UP 🚀"
-                        diferencia = precio_btc - target_activo
-                        identificador_senal = f"ENTRADA_{target_activo}"
+                        # A. CONDICIÓN DE ENTRADA (COMPRAR UP)
+                        if precio_btc > target_activo:
+                            accion = "COMPRAR UP 🚀"
+                            diferencia = precio_btc - target_activo
+                            identificador_senal = f"ENTRADA_{target_activo}"
 
-                        if ultima_senal_enviada != identificador_senal:
-                            embed = discord.Embed(
-                                title="🚨 NUEVA SEÑAL KALSHI BTC",
-                                color=discord.Color.green()
-                            )
-                            embed.add_field(name="Acción", value=f"🔥 **{accion}**", inline=False)
-                            embed.add_field(name="Precio BTC (Coinbase)", value=f"${precio_btc:,.2f}", inline=True)
-                            embed.add_field(name="Target a Vencer", value=f"${target_activo:,.2f}", inline=True)
-                            embed.add_field(name="Margen A Favor", value=f"+${diferencia:,.2f}", inline=False)
+                            if ultima_senal_enviada != identificador_senal:
+                                embed = discord.Embed(
+                                    title="🚨 NUEVA SEÑAL KALSHI BTC",
+                                    color=discord.Color.green()
+                                )
+                                embed.add_field(name="Acción", value=f"🔥 **{accion}**", inline=False)
+                                embed.add_field(name="Precio BTC (Coinbase)", value=f"${precio_btc:,.2f}", inline=True)
+                                embed.add_field(name="Target a Vencer", value=f"${target_activo:,.2f}", inline=True)
+                                embed.add_field(name="Margen A Favor", value=f"+${diferencia:,.2f}", inline=False)
 
-                            await canal.send(embed=embed)
-                            print(f"📢 Señal enviada a Discord: {accion} | Target: {target_activo}")
-                            ultima_senal_enviada = identificador_senal
+                                await canal.send(embed=embed)
+                                print(f"⚡ [ULTRA FAST] Señal enviada: {accion} | Target: {target_activo}")
+                                ultima_senal_enviada = identificador_senal
 
-                    # B. CONDICIÓN DE SALIDA / STOP LOSS
-                    elif precio_btc < (target_activo - 20.0):
-                        accion = "SALIR / CERRAR OPERACIÓN 🛑"
-                        caida = target_activo - precio_btc
-                        identificador_senal = f"SALIDA_{target_activo}"
+                        # B. CONDICIÓN DE SALIDA / STOP LOSS (Cae $20 por debajo del Target)
+                        elif precio_btc < (target_activo - 20.0):
+                            accion = "SALIR / CERRAR OPERACIÓN 🛑"
+                            caida = target_activo - precio_btc
+                            identificador_senal = f"SALIDA_{target_activo}"
 
-                        if ultima_senal_enviada != identificador_senal and ultima_senal_enviada is not None and "ENTRADA" in str(ultima_senal_enviada):
-                            embed = discord.Embed(
-                                title="⚠️ ALERTA DE SALIDA (INVALIDACIÓN / STOP LOSS)",
-                                color=discord.Color.red()
-                            )
-                            embed.add_field(name="Acción", value=f"🚨 **{accion}**", inline=False)
-                            embed.add_field(name="Precio BTC Actual", value=f"${precio_btc:,.2f}", inline=True)
-                            embed.add_field(name="Target de Entrada", value=f"${target_activo:,.2f}", inline=True)
-                            embed.add_field(name="Caída desde Target", value=f"-${caida:,.2f}", inline=False)
+                            if ultima_senal_enviada != identificador_senal and ultima_senal_enviada is not None and "ENTRADA" in str(ultima_senal_enviada):
+                                embed = discord.Embed(
+                                    title="⚠️ ALERTA DE SALIDA (INVALIDACIÓN / STOP LOSS)",
+                                    color=discord.Color.red()
+                                )
+                                embed.add_field(name="Acción", value=f"🚨 **{accion}**", inline=False)
+                                embed.add_field(name="Precio BTC Actual", value=f"${precio_btc:,.2f}", inline=True)
+                                embed.add_field(name="Target de Entrada", value=f"${target_activo:,.2f}", inline=True)
+                                embed.add_field(name="Caída desde Target", value=f"-${caida:,.2f}", inline=False)
 
-                            await canal.send(embed=embed)
-                            print(f"🛑 Alerta de Salida enviada a Discord: -${caida:,.2f}")
-                            ultima_senal_enviada = identificador_senal
+                                await canal.send(embed=embed)
+                                print(f"🛑 Alerta de Salida enviada a Discord: -${caida:,.2f}")
+                                ultima_senal_enviada = identificador_senal
 
-                # 2. MONITOREO DE BALLENAS
-                ballena = buscar_ballenas_binance()
-                if ballena:
-                    monto_usd = ballena["monto"] * ballena["precio"]
-                    embed_ballena = discord.Embed(
-                        title=f"🐳 ALERTA DE BALLENA ({ballena['exchange']})",
-                        color=discord.Color.gold()
-                    )
-                    embed_ballena.add_field(name="Operación", value=f"**{ballena['tipo']}**", inline=True)
-                    embed_ballena.add_field(name="Cantidad", value=f"**{ballena['monto']:.2f} BTC** (~${monto_usd:,.2f})", inline=True)
-                    embed_ballena.add_field(name="Precio Ejecutado", value=f"${ballena['precio']:,.2f}", inline=False)
+                    # MONITOREO DE BALLENAS
+                    ballena = await buscar_ballenas_binance(session)
+                    if ballena:
+                        monto_usd = ballena["monto"] * ballena["precio"]
+                        embed_ballena = discord.Embed(
+                            title=f"🐳 ALERTA DE BALLENA ({ballena['exchange']})",
+                            color=discord.Color.gold()
+                        )
+                        embed_ballena.add_field(name="Operación", value=f"**{ballena['tipo']}**", inline=True)
+                        embed_ballena.add_field(name="Cantidad", value=f"**{ballena['monto']:.2f} BTC** (~${monto_usd:,.2f})", inline=True)
+                        embed_ballena.add_field(name="Precio Ejecutado", value=f"${ballena['precio']:,.2f}", inline=False)
 
-                    await canal.send(embed_ballena)
-                    print(f"🐳 Ballena detectada: {ballena['monto']} BTC en {ballena['exchange']}")
+                        await canal.send(embed_ballena)
+                        print(f"🐳 Ballena detectada: {ballena['monto']} BTC en {ballena['exchange']}")
 
-            else:
-                print("⚠️ No se encontró el canal 'alertas-kalshi'")
+                else:
+                    print("⚠️ No se encontró el canal 'alertas-kalshi'")
 
-        except Exception as e:
-            print(f"⚠️ Error en ciclo de monitoreo: {e}")
+            except Exception as e:
+                print(f"⚠️ Error en ciclo de monitoreo: {e}")
 
-        await asyncio.sleep(15)
+            # Latencia reducida a 3 segundos
+            await asyncio.sleep(3)
 
 # ==========================================
 # 6. INICIALIZACIÓN
