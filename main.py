@@ -8,9 +8,22 @@ from datetime import datetime, timezone
 # ==========================================
 # SERVIDOR WEB PARA RENDER (EVITA ERROR DE PUERTO)
 # ==========================================
+class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot OK")
+
+    def do_HEAD(self):
+        self.send_response(200)
+        self.end_headers()
+
+    def log_message(self, format, *args):
+        return  # Desactiva logs HTTP para no ensuciar la consola de Render
+
 def run_dummy_server():
     port = int(os.getenv("PORT", 10000))
-    server = HTTPServer(('0.0.0.0', port), BaseHTTPRequestHandler)
+    server = HTTPServer(('0.0.0.0', port), SimpleHTTPRequestHandler)
     server.serve_forever()
 
 # ==========================================
