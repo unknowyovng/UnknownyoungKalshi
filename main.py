@@ -7,7 +7,9 @@ import threading
 
 # Configuración de Discord Webhook desde variables de entorno
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
-POLL_INTERVAL = 15  # Consultar cada 15 segundos
+
+# Frecuencia ultra-rápida (cada 3 segundos) para capturar el contrato a bajo precio
+POLL_INTERVAL = 3  
 
 # Variables globales para control de estado
 last_sent_action = "NEUTRAL"
@@ -56,19 +58,26 @@ def get_btc_price():
         return None
 
 
-def get_exact_kalshi_target_from_coinbase():
+def get_exact_kalshi_target_from_coinbase(now):
     """
-    Obtiene el precio de cierre de la vela de 1 minuto recién completada en Coinbase,
-    que corresponde exactamente al 'Price to beat' que fija Kalshi a las :00.
+    Obtiene el precio de cierre de la vela del minuto :59 exacto de Coinbase,
+    que corresponde al 'Price to beat' oficial asignado por Kalshi.
     """
     try:
+        block_start_dt = now.replace(second=0, microsecond=0)
+        prev_minute_ts = int(block_start_dt.timestamp()) - 60
+
         url = "https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=60"
         res = requests.get(url, timeout=5).json()
+
         if isinstance(res, list) and len(res) > 0:
-            # Ordenar velas por timestamp por si acaso
+            target_candle = next((c for c in res if c[0] == prev_minute_ts), None)
+            if target_candle:
+                return float(target_candle[4])  # Close exacto
+            
             sorted_candles = sorted(res, key=lambda x: x[0], reverse=True)
-            # res[0] o sorted_candles[0] es la vela más reciente
-            # res[X][4] es el precio de CIERRE (Close)
+            if len(sorted_candles) > 1:
+                return float(sorted_candles[1][4])
             return float(sorted_candles[0][4])
     except Exception as e:
         print(f"⚠️ Error al obtener cierre histórico de Coinbase: {e}")
@@ -92,7 +101,6 @@ def fetch_candle_open_price(candle_block, now):
             if target_candle:
                 return float(target_candle[3])  # Open price exacto
             
-            # Buscar la más cercana
             sorted_candles = sorted(c_res, key=lambda x: x[0])
             for c in sorted_candles:
                 if c[0] >= block_start_ts:
@@ -103,32 +111,20 @@ def fetch_candle_open_price(candle_block, now):
 
 
 def evaluate_market(current_price, target_price, current_minute):
+    """
+    Evaluación instantánea con gatillo de $5.00:
+    Permite entrar al inicio del movimiento cuando los contratos en Kalshi aún están baratos.
+    """
     diff = current_price - target_price
     abs_diff = abs(diff)
 
-    # REGLAS SENSIBLES Y RÁPIDAS PARA DISPARAR SEÑALES TEMPRANAS
-    if current_minute >= 12:
-        if abs_diff < 10:
-            return "NEUTRAL", f"Mercado muy ajustado cerca del Target (Diferencia: ${diff:+.2f})"
-        elif diff > 0:
-            return "COMPRAR UP", f"Cierre Alcista (+${diff:.2f} sobre Target) | min {current_minute}/15"
-        else:
-            return "COMPRAR DOWN", f"Cierre Bajista (${abs_diff:.2f} bajo Target) | min {current_minute}/15"
-    elif current_minute >= 5:
-        if diff >= 12:
-            return "COMPRAR UP", f"Impulso Alcista Rápido (+${diff:.2f} sobre Target) | min {current_minute}/15"
-        elif diff <= -12:
-            return "COMPRAR DOWN", f"Tendencia Bajista Rápida (${abs_diff:.2f} bajo Target) | min {current_minute}/15"
-        else:
-            return "NEUTRAL", f"Sin tendencia clara (+${diff:.2f} del Target) | min {current_minute}/15"
+    # Gatillo ultra-sensible de $5.00 para la entrada temprana
+    if diff >= 5.0:
+        return "COMPRAR UP", f"⚡ Entrada Temprana (+${diff:.2f} sobre Target) | min {current_minute}/15"
+    elif diff <= -5.0:
+        return "COMPRAR DOWN", f"⚡ Entrada Temprana (${abs_diff:.2f} bajo Target) | min {current_minute}/15"
     else:
-        # Minutos 0 a 4: Rupturas tempranas muy sensibles (+$20 / -$20)
-        if diff >= 20:
-            return "COMPRAR UP", f"Ruptura Alcista Temprana (+${diff:.2f} sobre Target) | min {current_minute}/15"
-        elif diff <= -20:
-            return "COMPRAR DOWN", f"Caída Temprana (${abs_diff:.2f} bajo Target) | min {current_minute}/15"
-        else:
-            return "NEUTRAL", f"Fase de inicio de vela (Diferencia: ${diff:+.2f}) | min {current_minute}/15"
+        return "NEUTRAL", f"Esperando ruptura (${diff:+.2f} del Target) | min {current_minute}/15"
 
 
 def main():
@@ -137,8 +133,8 @@ def main():
     # Iniciar servidor web dummy para Render
     threading.Thread(target=run_dummy_server, daemon=True).start()
 
-    print("🚀 Bot Kalshi 15m iniciado con éxito.")
-    send_discord_alert("🟢 **BOT CONECTADO**\nBot iniciado correctamente y monitoreando mercado.")
+    print("🚀 Bot Kalshi 15m iniciado con respuesta rápida (3s).")
+    send_discord_alert("🟢 **BOT CONECTADO**\nMotor optimizado para entradas tempranas de alto margen.")
 
     while True:
         try:
@@ -152,8 +148,7 @@ def main():
                 # Fijar Target al inicio del nuevo bloque o si el bot recién arranca
                 if candle_block != last_candle_block or current_target_price is None:
                     if current_minute == 0:
-                        # Obtener el precio de cierre exacto de la vela previa (método Kalshi)
-                        exact_target = get_exact_kalshi_target_from_coinbase()
+                        exact_target = get_exact_kalshi_target_from_coinbase(now)
                         if exact_target is not None:
                             current_target_price = exact_target
                             print(f"📌 [TARGET KALSHI EXACTO FIJADO]: ${current_target_price:.2f} para bloque {candle_block * 15}m")
@@ -161,7 +156,6 @@ def main():
                             current_target_price = btc_price
                             print(f"📌 [TARGET SPOT RESPALDO FIJADO]: ${current_target_price:.2f} para bloque {candle_block * 15}m")
                     else:
-                        # Si entra a mitad de bloque, busca el Open exacto del inicio del bloque
                         open_price = fetch_candle_open_price(candle_block, now)
                         if open_price is not None:
                             current_target_price = open_price
