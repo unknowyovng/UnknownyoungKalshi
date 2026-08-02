@@ -55,21 +55,27 @@ def get_btc_price():
         return None
 
 
-def get_kalshi_official_target():
-    """Consulta la API pública de Kalshi para obtener el 'strike' o Target de la vela activa."""
+def fetch_candle_open_price(candle_block, now):
+    """Obtiene la cotización exacta de apertura de la vela del bloque de 15m actual desde Coinbase."""
     try:
-        url = "https://api.elections.kalshi.com/trade-api/v2/markets?series_ticker=KXBTC15M&limit=5"
-        res = requests.get(url, timeout=5).json()
-        markets = res.get("markets", [])
-        
-        for m in markets:
-            # Buscar el mercado que esté 'active' o 'open'
-            if m.get("status") in ["active", "open"]:
-                strike = m.get("floor_strike") or m.get("cap_strike") or m.get("strike_price")
-                if strike is not None:
-                    return float(strike)
+        block_start_dt = now.replace(minute=(candle_block * 15), second=0, microsecond=0)
+        block_start_ts = int(block_start_dt.timestamp())
+
+        candles_url = "https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=60"
+        c_res = requests.get(candles_url, timeout=5).json()
+
+        if isinstance(c_res, list) and len(c_res) > 0:
+            target_candle = next((c for c in c_res if c[0] == block_start_ts), None)
+            if target_candle:
+                return float(target_candle[3])  # Open price exacto
+            
+            # Si no se encuentra exacta, usar la vela de inicio de bloque más cercana
+            sorted_candles = sorted(c_res, key=lambda x: x[0])
+            for c in sorted_candles:
+                if c[0] >= block_start_ts:
+                    return float(c[3])
     except Exception as e:
-        print(f"⚠️ Error consultando Kalshi directo: {e}")
+        print(f"⚠️ Error buscando apertura histórica: {e}")
     return None
 
 
@@ -77,24 +83,26 @@ def evaluate_market(current_price, target_price, current_minute):
     diff = current_price - target_price
     abs_diff = abs(diff)
 
+    # REGLAS SENSIBLES Y RÁPIDAS PARA DISPARAR SEÑALES TEMPRANAS
     if current_minute >= 12:
-        if abs_diff < 15:
+        if abs_diff < 10:
             return "NEUTRAL", f"Mercado muy ajustado cerca del Target (Diferencia: ${diff:+.2f})"
         elif diff > 0:
-            return "COMPRAR UP", f"Cierre fuerte Alcista (+${diff:.2f} sobre Target) | min {current_minute}/15"
+            return "COMPRAR UP", f"Cierre Alcista (+${diff:.2f} sobre Target) | min {current_minute}/15"
         else:
-            return "COMPRAR DOWN", f"Cierre fuerte Bajista (${abs_diff:.2f} bajo Target) | min {current_minute}/15"
+            return "COMPRAR DOWN", f"Cierre Bajista (${abs_diff:.2f} bajo Target) | min {current_minute}/15"
     elif current_minute >= 5:
-        if diff >= 20:
-            return "COMPRAR UP", f"Impulso Alcista (+${diff:.2f} sobre Target) | min {current_minute}/15"
-        elif diff <= -20:
-            return "COMPRAR DOWN", f"Tendencia Bajista (${abs_diff:.2f} bajo Target) | min {current_minute}/15"
+        if diff >= 12:
+            return "COMPRAR UP", f"Impulso Alcista Rápido (+${diff:.2f} sobre Target) | min {current_minute}/15"
+        elif diff <= -12:
+            return "COMPRAR DOWN", f"Tendencia Bajista Rápida (${abs_diff:.2f} bajo Target) | min {current_minute}/15"
         else:
             return "NEUTRAL", f"Sin tendencia clara (+${diff:.2f} del Target) | min {current_minute}/15"
     else:
-        if diff >= 35:
+        # Minutos 0 a 4: Rupturas tempranas más sensibles (+$20 en lugar de +$35)
+        if diff >= 20:
             return "COMPRAR UP", f"Ruptura Alcista Temprana (+${diff:.2f} sobre Target) | min {current_minute}/15"
-        elif diff <= -35:
+        elif diff <= -20:
             return "COMPRAR DOWN", f"Caída Temprana (${abs_diff:.2f} bajo Target) | min {current_minute}/15"
         else:
             return "NEUTRAL", f"Fase de inicio de vela (Diferencia: ${diff:+.2f}) | min {current_minute}/15"
@@ -118,18 +126,21 @@ def main():
             btc_price = get_btc_price()
 
             if btc_price is not None:
-                # Fijar Target al cambiar de vela (cada 15m) o si el bot recién enciende
+                # Fijar Target al inicio de vela o si el bot acaba de iniciar
                 if candle_block != last_candle_block or current_target_price is None:
-                    # Intento prioritario: Target directo de la API Kalshi
-                    target_k = get_kalshi_official_target()
-
-                    if target_k is not None:
-                        current_target_price = target_k
-                        print(f"📌 [TARGET KALSHI COMPROBADO]: ${current_target_price:.2f} (Bloque {candle_block * 15}m)")
-                    else:
-                        # Si Kalshi no responde, usamos el precio spot de apertura instantáneo
+                    # Si es el inicio de la vela (minuto 0)
+                    if current_minute == 0:
                         current_target_price = btc_price
-                        print(f"📌 [TARGET SPOT INICIAL FIJADO]: ${current_target_price:.2f} (Bloque {candle_block * 15}m)")
+                        print(f"📌 [TARGET APERTURA FIJADO]: ${current_target_price:.2f} para bloque {candle_block * 15}m")
+                    else:
+                        # Si entra a mitad de bloque, busca el Open exacto del minuto :00
+                        open_price = fetch_candle_open_price(candle_block, now)
+                        if open_price is not None:
+                            current_target_price = open_price
+                            print(f"📌 [TARGET APERTURA HISTÓRICA FIJADO]: ${current_target_price:.2f} para bloque {candle_block * 15}m")
+                        else:
+                            current_target_price = btc_price
+                            print(f"📌 [TARGET SPOT RESPALDO FIJADO]: ${current_target_price:.2f} para bloque {candle_block * 15}m")
 
                     last_candle_block = candle_block
                     last_sent_action = "NEUTRAL"
