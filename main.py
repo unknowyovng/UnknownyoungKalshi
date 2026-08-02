@@ -19,23 +19,23 @@ sys.stdout.reconfigure(line_buffering=True)
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1533349076593283252/QPKKfcqt0F1I0WcUEnwl5GjVsQTQYL23BvX8FOYM1p4laseCH0iDNPhdfd0VApHafggJ"
 
 # ------------------------------------------
-# SERVIDOR FLASK (Health Check para Render)
+# SERVIDOR FLASK (Health Check)
 # ------------------------------------------
 app = Flask(__name__)
 
 @app.route('/')
 def health_check():
-    return "OK - Bot activo y ejecutándose", 200
+    return "OK - Bot Kalshi Activo", 200
 
 # ------------------------------------------
-# ALERTAS DISCORD
+# ENVÍO DE ALERTAS
 # ------------------------------------------
 def send_discord_alert(action, price, reason, timestamp):
     if not DISCORD_WEBHOOK_URL:
         return
     
     color = 0x3498DB
-    if "COMPRAR UP" in action or "INICIO" in action:
+    if "COMPRAR UP" in action:
         color = 0x2ECC71
     elif "COMPRAR DOWN" in action:
         color = 0xE74C3C
@@ -43,29 +43,24 @@ def send_discord_alert(action, price, reason, timestamp):
         color = 0xF1C40F
 
     embed = {
-        "title": "🚨 SEÑAL KALSHI BTC (DINÁMICA 15M)",
+        "title": "🚨 SEÑAL KALSHI BTC 15M",
         "color": color,
         "fields": [
             {"name": "Acción", "value": f"**{action}**", "inline": False},
-            {"name": "Precio BTC Kalshi", "value": f"${price:,.2f}", "inline": True},
+            {"name": "Precio BTC", "value": f"${price:,.2f}", "inline": True},
             {"name": "Hora", "value": timestamp, "inline": True},
-            {"name": "Detalle / Motivo", "value": reason, "inline": False}
+            {"name": "Detalle", "value": reason, "inline": False}
         ],
-        "footer": {"text": "Bot Multiopero 15m | Entradas continuas Min 0-12"}
-    }
-
-    payload = {
-        "username": "Bot Kalshi Signals",
-        "embeds": [embed]
+        "footer": {"text": "Bot Estratégico Kalshi"}
     }
 
     try:
-        requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=5)
+        requests.post(DISCORD_WEBHOOK_URL, json={"username": "Bot Kalshi Signals", "embeds": [embed]}, timeout=5)
     except Exception as e:
         print(f"[ERROR DISCORD]: {e}", flush=True)
 
 # ------------------------------------------
-# ESTRATEGIA Y COINBASE WEBSOCKET
+# LOGICA PRINCIPAL DE ESTRATEGIA
 # ------------------------------------------
 COINBASE_WS = "wss://ws-feed.exchange.coinbase.com"
 candles_1m = pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -85,62 +80,53 @@ def load_initial_candles():
             candles_1m = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']].tail(30)
             print("✅ Historial inicial de 30 velas cargado exitosamente.", flush=True)
     except Exception as e:
-        print(f"[WARN] No se pudo cargar historial previo: {e}", flush=True)
+        print(f"[WARN] Error cargando velas iniciales: {e}", flush=True)
 
-def calculate_interval_signals(df_1m):
+def evaluate_signals(df_1m):
     if len(df_1m) < 5:
-        return "NEUTRAL ⚖️", "RECOLECTANDO VELAS INICIALES"
+        return "NEUTRAL ⚖️", "Cargando datos..."
 
     now = datetime.now()
-    minute_of_hour = now.minute
-    interval_start_min = (minute_of_hour // 15) * 15
-    minute_in_interval = minute_of_hour - interval_start_min
+    min_in_15 = now.minute % 15
 
-    # Cálculo de EMAs de reacción rápida
+    # Indicadores Rápidos
     df_1m['ema9'] = df_1m['close'].ewm(span=9, adjust=False).mean()
     df_1m['ema21'] = df_1m['close'].ewm(span=21, adjust=False).mean()
-    
-    last_1m = df_1m.iloc[-1]
-    prev_1m = df_1m.iloc[-2]
 
-    # Medición de cuerpo y mechas
-    body = abs(last_1m['close'] - last_1m['open'])
-    upper_wick = last_1m['high'] - max(last_1m['close'], last_1m['open'])
-    lower_wick = min(last_1m['close'], last_1m['open']) - last_1m['low']
+    last = df_1m.iloc[-1]
+    prev = df_1m.iloc[-2]
 
-    # 1. ALERTAS DE CIERRE Y TOMAR GANANCIA (En cualquier minuto)
-    if upper_wick > (body * 1.4) and upper_wick > 0:
-        return "💰 CERRAR / TOMAR PROFIT (UP)", f"Rechazo bajista (Mecha superior) en min {minute_in_interval}/15"
-    
-    if lower_wick > (body * 1.4) and lower_wick > 0:
-        return "💰 CERRAR / TOMAR PROFIT (DOWN)", f"Rechazo alcista (Mecha inferior) en min {minute_in_interval}/15"
+    # Cierre por mecha/rechazo en cualquier minuto
+    body = abs(last['close'] - last['open'])
+    upper_wick = last['high'] - max(last['close'], last['open'])
+    lower_wick = min(last['close'], last['open']) - last['low']
 
-    # 2. BLOQUEO FINAL DE CUOTAS (Últimos 2 minutos del bloque de 15m)
-    if minute_in_interval >= 13:
-        return "NEUTRAL ⚖️", f"CIERRE DE BLOQUE ({minute_in_interval}/15m) - Cuotas extremadamente bajas en Kalshi"
+    if upper_wick > (body * 1.5) and upper_wick > 0:
+        return "💰 CERRAR / PROFIT (UP)", f"Rechazo en min {min_in_15}/15"
+    if lower_wick > (body * 1.5) and lower_wick > 0:
+        return "💰 CERRAR / PROFIT (DOWN)", f"Rechazo en min {min_in_15}/15"
 
-    # 3. CONDICIONES TÉCNICAS
-    ema_bull = last_1m['ema9'] > last_1m['ema21']
-    ema_bear = last_1m['ema9'] < last_1m['ema21']
-    green = last_1m['close'] > last_1m['open']
-    red = last_1m['close'] < last_1m['open']
-    momentum_up = last_1m['close'] > prev_1m['close']
-    momentum_down = last_1m['close'] < prev_1m['close']
+    # Bloqueo final de cuota baja (últimos 2 min del bloque de 15m)
+    if min_in_15 >= 13:
+        return "NEUTRAL ⚖️", f"Final de bloque ({min_in_15}/15m) - Cuota baja"
 
-    # 4. ENTRADAS Y MULTI-OPERACIONES (Minutos 0 a 12)
-    if minute_in_interval <= 3:
-        if ema_bull and green:
-            return "🔥 ENTRADA PRINCIPAL: COMPRAR UP 🚀", f"Inicio de bloque ({minute_in_interval}m/15m) - Cuota óptima"
-        elif ema_bear and red:
-            return "🔥 ENTRADA PRINCIPAL: COMPRAR DOWN 📉", f"Inicio de bloque ({minute_in_interval}m/15m) - Cuota óptima"
+    # Señales de Entrada
+    is_bull = last['ema9'] > last['ema21'] and last['close'] >= last['open']
+    is_bear = last['ema9'] < last['ema21'] and last['close'] <= last['open']
 
-    elif 4 <= minute_in_interval <= 12:
-        if ema_bull and green and momentum_up:
-            return f"⚡ RE-ENTRADA #{minute_in_interval}: COMPRAR UP 🚀", f"Impulso continuo en min {minute_in_interval}/15"
-        elif ema_bear and red and momentum_down:
-            return f"⚡ RE-ENTRADA #{minute_in_interval}: COMPRAR DOWN 📉", f"Impulso continuo en min {minute_in_interval}/15"
+    if is_bull:
+        if min_in_15 <= 3:
+            return "🔥 COMPRAR UP 🚀", f"Entrada inicio de bloque (min {min_in_15}/15)"
+        else:
+            return f"⚡ RE-ENTRADA COMPRAR UP 🚀", f"Impulso continuo (min {min_in_15}/15)"
 
-    return "NEUTRAL ⚖️", f"Consolidando / Sin impulso claro ({minute_in_interval}/15m)"
+    if is_bear:
+        if min_in_15 <= 3:
+            return "🔥 COMPRAR DOWN 📉", f"Entrada inicio de bloque (min {min_in_15}/15)"
+        else:
+            return f"⚡ RE-ENTRADA COMPRAR DOWN 📉", f"Impulso continuo (min {min_in_15}/15)"
+
+    return "NEUTRAL ⚖️", f"Esperando señal clara ({min_in_15}/15m)"
 
 async def coinbase_websocket_listener():
     global candles_1m, current_minute_ticks, last_sent_action
@@ -153,16 +139,14 @@ async def coinbase_websocket_listener():
 
     while True:
         try:
-            async with websockets.connect(COINBASE_WS) as ws:
+            async with websockets.connect(COINBASE_WS, ping_interval=20, ping_timeout=10) as ws:
                 await ws.send(json.dumps(subscribe_msg))
-                print("🟢 Conectado a Coinbase Feed. Procesando ticks...", flush=True)
+                print("🟢 Conectado a Coinbase Feed. Procesando...", flush=True)
                 
                 last_minute = datetime.now().minute
                 
-                while True:
-                    msg = await ws.recv()
+                async for msg in ws:
                     data = json.loads(msg)
-                    
                     if data.get('type') == 'ticker' and 'price' in data:
                         price = float(data['price'])
                         size = float(data.get('last_size', 0))
@@ -187,11 +171,12 @@ async def coinbase_websocket_listener():
                                 }])
                                 
                                 candles_1m = pd.concat([candles_1m, new_row], ignore_index=True)
-                                action, reason = calculate_interval_signals(candles_1m)
+                                action, reason = evaluate_signals(candles_1m)
                                 
-                                print(f"[{t_stamp}] BTC Kalshi: ${close_p:,.2f} | ACCIÓN: {action} ({reason})", flush=True)
+                                # IMPRIMIR OBLIGATORIAMENTE EN CADA MINUTO
+                                print(f"[{t_stamp}] BTC: ${close_p:,.2f} | ACCIÓN: {action} ({reason})", flush=True)
 
-                                if "COMPRAR" in action or "CERRAR" in action or "PROFIT" in action or "ENTRADA" in action:
+                                if "COMPRAR" in action or "CERRAR" in action or "PROFIT" in action:
                                     if action != last_sent_action:
                                         send_discord_alert(action, close_p, reason, t_stamp)
                                         last_sent_action = action
@@ -202,7 +187,7 @@ async def coinbase_websocket_listener():
 
         except Exception as e:
             print(f"[RECONECTANDO COINBASE]: {e}", flush=True)
-            await asyncio.sleep(5)
+            await asyncio.sleep(3)
 
 def run_bot():
     load_initial_candles()
