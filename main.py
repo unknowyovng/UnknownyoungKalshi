@@ -6,7 +6,8 @@ import websockets
 import pandas as pd
 import requests
 from datetime import datetime
-from http.server import HTTPServer, BaseHTTPRequestHandler
+import http.server
+import socketserver
 import os
 
 # ==========================================
@@ -16,13 +17,15 @@ DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1533349076593283252/QPKK
 
 sys.stdout.reconfigure(line_buffering=True)
 
-# SERVIDOR HTTP NATIVO (Usa la librería estándar de Python, sin depender de Flask)
-class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
+# ------------------------------------------
+# SERVIDOR HTTP ASÍNCRONO NATIVO (Health Check para Render)
+# ------------------------------------------
+class HealthCheckHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.send_header("Content-type", "text/plain")
         self.end_headers()
-        self.wfile.write(b"Bot Kalshi-Coinbase Activo 24/7")
+        self.wfile.write(b"OK")
 
     def do_HEAD(self):
         self.send_response(200)
@@ -30,15 +33,19 @@ class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def log_message(self, format, *args):
-        # Desactiva logs de peticiones HTTP periódicas para no saturar la consola
+        # Desactiva logs molestos de HTTP
         return
 
-def run_http_server():
+def start_health_server():
     port = int(os.environ.get("PORT", 10000))
-    server = HTTPServer(('0.0.0.0', port), SimpleHTTPRequestHandler)
-    print(f"🌐 Servidor Web escuchando en puerto {port}...", flush=True)
-    server.serve_forever()
+    socketserver.TCPServer.allow_reuse_address = True
+    with socketserver.TCPServer(("0.0.0.0", port), HealthCheckHandler) as httpd:
+        print(f"🌐 Servidor Health Check escuchando en puerto {port}...", flush=True)
+        httpd.serve_forever()
 
+# ------------------------------------------
+# ALERTAS DISCORD
+# ------------------------------------------
 def send_discord_alert(action, price, reason, timestamp):
     if not DISCORD_WEBHOOK_URL:
         return
@@ -73,6 +80,9 @@ def send_discord_alert(action, price, reason, timestamp):
     except Exception as e:
         print(f"[ERROR DISCORD]: {e}", flush=True)
 
+# ------------------------------------------
+# ESTRATEGIA Y COINBASE WEBSOCKET
+# ------------------------------------------
 COINBASE_WS = "wss://ws-feed.exchange.coinbase.com"
 candles_1m = pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 current_minute_ticks = []
@@ -232,14 +242,11 @@ async def coinbase_websocket_listener():
             print(f"[RECONECTANDO COINBASE]: {e}", flush=True)
             await asyncio.sleep(5)
 
-def start_bot_thread():
-    load_initial_candles()
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(coinbase_websocket_listener())
-
 if __name__ == "__main__":
-    # Inicia el WebSocket en un hilo secundario
-    threading.Thread(target=start_bot_thread, daemon=True).start()
-    # Inicia el Servidor HTTP nativo en el hilo principal
-    run_http_server()
+    # 1. Arrancar el Servidor HTTP en un Hilo Secundario (Daemon)
+    server_thread = threading.Thread(target=start_health_server, daemon=True)
+    server_thread.start()
+
+    # 2. Cargar historial e iniciar el WebSocket de Coinbase en el HILO PRINCIPAL
+    load_initial_candles()
+    asyncio.run(coinbase_websocket_listener())
