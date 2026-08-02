@@ -103,16 +103,26 @@ def main():
                 # Fijar Target al inicio de cada vela de 15m o en un reinicio
                 if candle_block != last_candle_block or current_target_price is None:
                     try:
-                        # Pausa táctica de 4 segundos para que Coinbase procese la apertura oficial de la vela
-                        time.sleep(4)
-                        
-                        # Consultar la vela de 1 minuto para obtener el 'Open' exacto
+                        # Si estamos en los primeros segundos del minuto 0, esperamos un momento para que Coinbase consolide el trade
+                        if current_minute == 0:
+                            time.sleep(4)
+
+                        # Calcular Timestamp exacto del inicio del bloque de 15m actual
+                        block_start_dt = now.replace(minute=(candle_block * 15), second=0, microsecond=0)
+                        block_start_ts = int(block_start_dt.timestamp())
+
+                        # Consultar historial de velas de 1 minuto
                         candles_url = "https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=60"
                         c_res = requests.get(candles_url, timeout=5).json()
 
                         if isinstance(c_res, list) and len(c_res) > 0:
-                            # c_res[0][3] es el precio de apertura (Open) de la vela más reciente
-                            current_target_price = float(c_res[0][3])
+                            # Buscar la vela que coincide exactamente con el timestamp de inicio del bloque (:00:00)
+                            target_candle = next((c for c in c_res if c[0] == block_start_ts), None)
+                            
+                            if target_candle:
+                                current_target_price = float(target_candle[3])  # Open price exacto de la vela :00
+                            else:
+                                current_target_price = float(c_res[0][3])
                         else:
                             current_target_price = btc_price
                     except Exception as e:
@@ -121,7 +131,7 @@ def main():
 
                     last_candle_block = candle_block
                     last_sent_action = "NEUTRAL"
-                    print(f"📌 [NUEVO TARGET FIJADO]: ${current_target_price:.2f} para el bloque {candle_block * 15}m")
+                    print(f"📌 [TARGET EXACTO BUSCADO Y FIJADO]: ${current_target_price:.2f} para bloque {candle_block * 15}m")
 
                 # Evaluar mercado
                 action, detail = evaluate_market(btc_price, current_target_price, current_minute)
