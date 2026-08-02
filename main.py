@@ -2,46 +2,30 @@ import threading
 import asyncio
 import json
 import sys
-import websockets
+import os
+import time
+from datetime import datetime
 import pandas as pd
 import requests
-from datetime import datetime
-import http.server
-import socketserver
-import os
+import websockets
+from flask import Flask
 
-# ==========================================
-# CONFIGURACIÓN DE DISCORD WEBHOOK
-# ==========================================
-DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1533349076593283252/QPKKfcqt0F1I0WcUEnwl5GjVsQTQYL23BvX8FOYM1p4laseCH0iDNPhdfd0VApHafggJ"
-
+# Forzar flush inmediato en prints de Render
 sys.stdout.reconfigure(line_buffering=True)
 
 # ------------------------------------------
-# SERVIDOR HTTP ASÍNCRONO NATIVO (Health Check para Render)
+# CONFIGURACIÓN DE DISCORD WEBHOOK
 # ------------------------------------------
-class HealthCheckHandler(http.server.SimpleHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-type", "text/plain")
-        self.end_headers()
-        self.wfile.write(b"OK")
+DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1533349076593283252/QPKKfcqt0F1I0WcUEnwl5GjVsQTQYL23BvX8FOYM1p4laseCH0iDNPhdfd0VApHafggJ"
 
-    def do_HEAD(self):
-        self.send_response(200)
-        self.send_header("Content-type", "text/plain")
-        self.end_headers()
+# ------------------------------------------
+# SERVIDOR FLASK (Health Check para Render)
+# ------------------------------------------
+app = Flask(__name__)
 
-    def log_message(self, format, *args):
-        # Desactiva logs molestos de HTTP
-        return
-
-def start_health_server():
-    port = int(os.environ.get("PORT", 10000))
-    socketserver.TCPServer.allow_reuse_address = True
-    with socketserver.TCPServer(("0.0.0.0", port), HealthCheckHandler) as httpd:
-        print(f"🌐 Servidor Health Check escuchando en puerto {port}...", flush=True)
-        httpd.serve_forever()
+@app.route('/')
+def health_check():
+    return "OK - Bot activo y ejecutándose", 200
 
 # ------------------------------------------
 # ALERTAS DISCORD
@@ -242,11 +226,14 @@ async def coinbase_websocket_listener():
             print(f"[RECONECTANDO COINBASE]: {e}", flush=True)
             await asyncio.sleep(5)
 
-if __name__ == "__main__":
-    # 1. Arrancar el Servidor HTTP en un Hilo Secundario (Daemon)
-    server_thread = threading.Thread(target=start_health_server, daemon=True)
-    server_thread.start()
-
-    # 2. Cargar historial e iniciar el WebSocket de Coinbase en el HILO PRINCIPAL
+def run_bot():
     load_initial_candles()
     asyncio.run(coinbase_websocket_listener())
+
+# Iniciar el Bot en Hilo Secundario
+bot_thread = threading.Thread(target=run_bot, daemon=True)
+bot_thread.start()
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
