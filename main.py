@@ -7,7 +7,7 @@ import discord
 from discord.ext import commands
 
 # ==========================================
-# 1. SERVIDOR WEB FALSO (Render Gratis)
+# 1. SERVIDOR WEB FALSO (Render Gratis 24/7)
 # ==========================================
 class DummyHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -34,7 +34,7 @@ manual_target = None
 modo_manual = False
 ultima_senal_enviada = None
 
-# Umbral para considerar una orden como "Ballena" (ej. 5 BTC o más)
+# Umbral para considerar una orden como "Ballena" (5 BTC o más)
 UMBRAL_BALLENA_BTC = 5.0  
 
 # ==========================================
@@ -110,7 +110,7 @@ def obtener_target_auto():
     return 63456.97
 
 # ==========================================
-# 5. CICLO DE MONITOREO DUAL (KALSHI + BALLENAS)
+# 5. CICLO DE MONITOREO (ENTRADAS, SALIDAS Y BALLENAS)
 # ==========================================
 async def ciclo_monitoreo():
     await bot.wait_until_ready()
@@ -122,7 +122,7 @@ async def ciclo_monitoreo():
         try:
             if canal:
                 # --------------------------------------------------
-                # A. MONITOREO DE PRECIO & TARGET (KALSHI)
+                # A. MONITOREO DE PRECIO, ENTRADAS Y SALIDAS
                 # --------------------------------------------------
                 precio_btc = obtener_precio_btc()
 
@@ -132,10 +132,11 @@ async def ciclo_monitoreo():
 
                     print(f"🔍 Monitoreando... BTC Coinbase: ${precio_btc:,.2f} | Target Activo: ${target_activo:,.2f}")
 
+                    # 1. CONDICIÓN DE ENTRADA (COMPRAR UP)
                     if precio_btc > target_activo:
                         accion = "COMPRAR UP 🚀"
                         diferencia = precio_btc - target_activo
-                        identificador_senal = f"{accion}_{target_activo}"
+                        identificador_senal = f"ENTRADA_{target_activo}"
 
                         if ultima_senal_enviada != identificador_senal:
                             embed = discord.Embed(
@@ -145,10 +146,32 @@ async def ciclo_monitoreo():
                             embed.add_field(name="Acción", value=f"🔥 **{accion}**", inline=False)
                             embed.add_field(name="Precio BTC (Coinbase)", value=f"${precio_btc:,.2f}", inline=True)
                             embed.add_field(name="Target a Vencer", value=f"${target_activo:,.2f}", inline=True)
-                            embed.add_field(name="Detalle", value=f"⚡ Entrada Temprana (+${diferencia:,.2f} sobre Target)", inline=False)
+                            embed.add_field(name="Margen A favor", value=f"+${diferencia:,.2f}", inline=False)
 
                             await canal.send(embed=embed)
-                            print(f"📢 Señal enviada a Discord: {accion} | Target: {target_activo}")
+                            print(f"📢 Señal de Entrada enviada a Discord: {accion}")
+                            ultima_senal_enviada = identificador_senal
+
+                    # 2. CONDICIÓN DE SALIDA / STOP LOSS (Cuando cae $20 por debajo del Target)
+                    elif precio_btc < (target_activo - 20.0):
+                        accion = "SALIR / CERRAR OPERACIÓN 🛑"
+                        caida = target_activo - precio_btc
+                        identificador_senal = f"SALIDA_{target_activo}"
+
+                        # Solo envía alerta de salida si veníamos de una ENTRADA activa
+                        if ultima_senal_enviada != identificador_senal and ultima_senal_enviada is not None and "ENTRADA" in str(ultima_senal_enviada):
+                            embed = discord.Embed(
+                                title="⚠️ ALERTA DE SALIDA (INVALIDACIÓN / STOP LOSS)",
+                                color=discord.Color.red()
+                            )
+                            embed.add_field(name="Acción", value=f"🚨 **{accion}**", inline=False)
+                            embed.add_field(name="Precio BTC Actual", value=f"${precio_btc:,.2f}", inline=True)
+                            embed.add_field(name="Target de Entrada", value=f"${target_activo:,.2f}", inline=True)
+                            embed.add_field(name="Caída desde Target", value=f"-${caida:,.2f}", inline=False)
+                            embed.add_field(name="Recomendación", value="Cerrar la posición para recortar pérdidas antes de un mayor retroceso.", inline=False)
+
+                            await canal.send(embed=embed)
+                            print(f"🛑 Alerta de Salida enviada a Discord: -${caida:,.2f}")
                             ultima_senal_enviada = identificador_senal
 
                 # --------------------------------------------------
@@ -165,7 +188,7 @@ async def ciclo_monitoreo():
                     embed_ballena.add_field(name="Cantidad", value=f"**{ballena['monto']:.2f} BTC** (~${monto_usd:,.2f})", inline=True)
                     embed_ballena.add_field(name="Precio Ejecutado", value=f"${ballena['precio']:,.2f}", inline=False)
 
-                    await canal.send(embed=embed_ballena)
+                    await canal.send(embed_ballena)
                     print(f"🐳 Ballena detectada: {ballena['monto']} BTC en {ballena['exchange']}")
 
             else:
