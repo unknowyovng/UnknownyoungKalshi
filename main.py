@@ -6,49 +6,58 @@ from datetime import datetime
 import os
 from flask import Flask
 
-# Servidor Flask mínimo para Render
+# Servidor Flask para Render
 app = Flask(__name__)
 
 @app.route('/')
 def health_check():
     return "OK - Bot Activo", 200
 
-# Discord Webhook
+# ------------------------------------------
+# CONFIGURACIÓN DE DISCORD WEBHOOK
+# ------------------------------------------
+# Asegúrate de colocar la URL exacta de tu Webhook aquí:
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1533349076593283252/QPKKfcqt0F1I0WcUEnwl5GjVsQTQYL23BvX8FOYM1p4laseCH0iDNPhdfd0VApHafggJ"
 
 last_sent_action = ""
 
 def send_discord_alert(action, price, reason, timestamp):
     if not DISCORD_WEBHOOK_URL:
+        print("[DISCORD] ERROR: URL de webhook no configurada.", flush=True)
         return
-    
+
     color = 0x3498DB
-    if "COMPRAR UP" in action:
+    if "COMPRAR UP" in action or "CONECTADO" in action:
         color = 0x2ECC71
     elif "COMPRAR DOWN" in action:
         color = 0xE74C3C
     elif "PROFIT" in action or "CERRAR" in action:
         color = 0xF1C40F
 
-    embed = {
-        "title": "🚨 SEÑAL KALSHI BTC 15M",
-        "color": color,
-        "fields": [
-            {"name": "Acción", "value": f"**{action}**", "inline": False},
-            {"name": "Precio BTC", "value": f"${price:,.2f}", "inline": True},
-            {"name": "Hora", "value": timestamp, "inline": True},
-            {"name": "Detalle", "value": reason, "inline": False}
-        ],
-        "footer": {"text": "Bot Kalshi 15m (Motor REST Directo)"}
+    payload = {
+        "username": "Bot Kalshi Signals",
+        "embeds": [{
+            "title": "🚨 SEÑAL KALSHI BTC 15M",
+            "color": color,
+            "fields": [
+                {"name": "Acción", "value": f"**{action}**", "inline": False},
+                {"name": "Precio BTC", "value": f"${price:,.2f}" if price > 0 else "N/A", "inline": True},
+                {"name": "Hora", "value": timestamp, "inline": True},
+                {"name": "Detalle", "value": reason, "inline": False}
+            ],
+            "footer": {"text": "Bot Kalshi 15m"}
+        }]
     }
 
     try:
-        requests.post(DISCORD_WEBHOOK_URL, json={"username": "Bot Kalshi Signals", "embeds": [embed]}, timeout=5)
+        res = requests.post(DISCORD_WEBHOOK_URL, json=payload, headers={"Content-Type": "application/json"}, timeout=5)
+        print(f"[DISCORD HTTP STATUS]: {res.status_code}", flush=True)
+        if res.status_code not in [200, 204]:
+            print(f"[DISCORD RES ERROR]: {res.text}", flush=True)
     except Exception as e:
-        print(f"[ERROR DISCORD]: {e}", flush=True)
+        print(f"[ERROR CONEXION DISCORD]: {e}", flush=True)
 
 def fetch_candles():
-    """ Obtiene velas de 1m directamente vía REST API para evitar bloqueos de WebSockets """
     try:
         url = "https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=60"
         res = requests.get(url, timeout=10)
@@ -59,7 +68,7 @@ def fetch_candles():
             df['timestamp'] = pd.to_datetime(df['time'], unit='s').dt.strftime('%H:%M:00')
             return df.tail(30)
     except Exception as e:
-        print(f"[ERROR FETCH]: {e}", flush=True)
+        print(f"[ERROR FETCH COINBASE]: {e}", flush=True)
     return None
 
 def evaluate_signals(df_1m):
@@ -69,13 +78,11 @@ def evaluate_signals(df_1m):
     now = datetime.now()
     min_in_15 = now.minute % 15
 
-    # Indicadores
     df_1m['ema9'] = df_1m['close'].ewm(span=9, adjust=False).mean()
     df_1m['ema21'] = df_1m['close'].ewm(span=21, adjust=False).mean()
 
     last = df_1m.iloc[-1]
 
-    # Cierre por mecha
     body = abs(last['close'] - last['open'])
     upper_wick = last['high'] - max(last['close'], last['open'])
     lower_wick = min(last['close'], last['open']) - last['low']
@@ -88,7 +95,6 @@ def evaluate_signals(df_1m):
     if min_in_15 >= 13:
         return "NEUTRAL ⚖️", f"Final de bloque ({min_in_15}/15m) - Cuota baja"
 
-    # Dirección
     is_bull = last['ema9'] > last['ema21'] and last['close'] >= last['open']
     is_bear = last['ema9'] < last['ema21'] and last['close'] <= last['open']
 
@@ -108,10 +114,10 @@ def evaluate_signals(df_1m):
 
 def bot_loop():
     global last_sent_action
-    print("🚀 Bot iniciado con arquitectura REST API direct...", flush=True)
+    print("🚀 Bot activo. Enviando notificación de prueba...", flush=True)
     
-    # Notificación de inicio a Discord para verificar conexión
-    send_discord_alert("🟢 BOT CONECTADO", 0, "Bot iniciado correctamente y monitoreando mercado.", datetime.now().strftime('%H:%M:%S'))
+    # Notificación de prueba inmediata al arrancar
+    send_discord_alert("🟢 BOT CONECTADO", 0, "Bot monitoreando mercado correctamente.", datetime.now().strftime('%H:%M:%S'))
 
     while True:
         try:
@@ -131,16 +137,13 @@ def bot_loop():
                         last_sent_action = action
 
         except Exception as e:
-            print(f"[ERROR LOOP]: {e}", flush=True)
+            print(f"[ERROR BOT LOOP]: {e}", flush=True)
 
-        # Esperar exactos 30 segundos antes de la siguiente consulta
         time.sleep(30)
 
 if __name__ == "__main__":
-    # Arrancar bot en hilo secundario
     t = threading.Thread(target=bot_loop, daemon=True)
     t.start()
 
-    # Arrancar Flask para Render
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
