@@ -177,7 +177,7 @@ async def coinbase_websocket_listener():
         try:
             async with websockets.connect(COINBASE_WS) as ws:
                 await ws.send(json.dumps(subscribe_msg))
-                print("🟢 Conectado a Coinbase Feed...", flush=True)
+                print("🟢 Conectado a Coinbase Feed. Esperando datos...", flush=True)
                 
                 last_minute = datetime.now().minute
                 
@@ -219,6 +219,8 @@ async def coinbase_websocket_listener():
                                         last_sent_action = action
 
                                 current_minute_ticks = []
+                            else:
+                                print(f"[{datetime.now().strftime('%H:%M:%S')}] Cambio de minuto detectado pero no hubo ticks recolectados.", flush=True)
                             
                             last_minute = now.minute
 
