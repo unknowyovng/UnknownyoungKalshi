@@ -6,7 +6,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timezone
 
 # ==========================================
-# SERVIDOR WEB PARA RENDER (EVITA ERROR DE PUERTO)
+# SERVIDOR WEB PARA RENDER (RESPUESTA 200 OK)
 # ==========================================
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -30,13 +30,11 @@ def run_dummy_server():
 # CONFIGURACIÓN Y VARIABLES DE ENTORNO
 # ==========================================
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "PEGA_AQUI_TU_WEBHOOK_DE_DISCORD")
-
-DISTANCIA_MAXIMA_TARGET = 15.0  # Máxima distancia en USD permitida para entrar
-POLL_INTERVAL = 10              # Frecuencia de chequeo en segundos (10s)
+POLL_INTERVAL = 10  # Frecuencia de chequeo en segundos (10s)
 
 # Estado global del bot
 last_sent_action = "NEUTRAL"
-current_target_price = None     # Se actualiza automáticamente al inicio de cada vela de 15m
+current_target_price = None  # Se actualiza automáticamente al inicio de cada vela de 15m
 last_candle_block = -1
 
 # ==========================================
@@ -71,7 +69,7 @@ def get_btc_price():
 # ==========================================
 def evaluate_market(current_price, target_price, current_minute):
     """
-    Calcula la acción sugerida basándose en el precio, el objetivo y el tiempo de la vela (15m).
+    Calcula la acción con márgenes limpios y sin bloqueos de distancia excesiva.
     """
     # 1. Filtro de seguridad para minutos finales (Cooldown en minutos 13 y 14)
     if current_minute >= 13:
@@ -81,21 +79,18 @@ def evaluate_market(current_price, target_price, current_minute):
     if target_price is None:
         return "NEUTRAL", "Esperando fijar Target Price del bloque"
 
-    distancia = target_price - current_price
+    diferencia = current_price - target_price  # Positivo = por encima | Negativo = por debajo
 
-    # 3. Filtro de Distancia Mínima al Target
-    if distancia > DISTANCIA_MAXIMA_TARGET and current_minute > 3:
-        return "NEUTRAL", f"Distancia al Target muy alta (${distancia:.2f})"
-
-    # 4. Condición de Entrada UP (Precio supera o está pegado al Target)
-    if current_price >= (target_price - 5.0):
-        return "COMPRAR UP", f"Impulso continuo (min {current_minute}/15 | Target: ${target_price:.2f})"
+    # 3. Condición de Entrada UP (BTC está al menos $2.00 por encima del Target)
+    if diferencia >= 2.0:
+        return "COMPRAR UP", f"Impulso Alcista (+${diferencia:.2f} sobre Target) | min {current_minute}/15"
     
-    # 5. Condición de Entrada DOWN (Precio cae por debajo del filtro)
-    elif current_price <= (target_price - DISTANCIA_MAXIMA_TARGET):
-        return "COMPRAR DOWN", f"Tendencia bajista (min {current_minute}/15 | Target: ${target_price:.2f})"
+    # 4. Condición de Entrada DOWN (BTC cae $5.00 o más por debajo del Target)
+    elif diferencia <= -5.0:
+        return "COMPRAR DOWN", f"Tendencia Bajista (${abs(diferencia):.2f} bajo Target) | min {current_minute}/15"
 
-    return "NEUTRAL", f"Mercado lateral / Cerca de Target (${target_price:.2f})"
+    # 5. Zona Neutral
+    return "NEUTRAL", f"Mercado cerca del Target (Diferencia: ${diferencia:+.2f})"
 
 # ==========================================
 # BUCLE PRINCIPAL (MAIN LOOP)
