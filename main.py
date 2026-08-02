@@ -27,7 +27,7 @@ def run_http_server():
 # ==========================================
 # CONFIGURACIÓN Y CREDENCIALES
 # ==========================================
-BINANCE_WS = "wss://stream.binance.com:9443/ws/btcusdt@trade"
+BINANCE_WS = "wss://stream.binance.us:9443/ws/btcusdt@trade"
 KALSHI_BASE_URL = "https://trading-api.kalshi.com/trade-api/v2"
 KALSHI_API_KEY_ID = "TU_KALSHI_KEY_ID"
 PRIVATE_KEY_PATH = "private_key.pem"
