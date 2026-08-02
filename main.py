@@ -10,8 +10,6 @@ import pandas as pd
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import padding
 
 # Servidor HTTP ficticio para Render (Compatible con UptimeRobot)
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
@@ -32,23 +30,15 @@ def run_http_server():
 # Forzar salida en vivo en consola
 sys.stdout.reconfigure(line_buffering=True)
 
-# ==========================================
-# CONFIGURACIÓN Y CREDENCIALES
-# ==========================================
 BINANCE_WS = "wss://stream.binance.us:9443/ws/btcusdt@kline_1m"
-KALSHI_BASE_URL = "https://trading-api.kalshi.com/trade-api/v2"
-KALSHI_API_KEY_ID = "TU_KALSHI_KEY_ID"
-PRIVATE_KEY_PATH = "private_key.pem"
-NEWS_API_URL = "https://cryptopanic.com/api/v1/posts/?auth_token=TU_TOKEN&currencies=BTC"
-
 candles_1m = pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
 # ==========================================
-# 1. EVALUADOR TÉCNICO DE DIRECCIÓN
+# EVALUADOR TÉCNICO CON ALERTA DE RETROCESO
 # ==========================================
 def calculate_signal(df):
     if len(df) < 5:
-        return "NEUTRAL", "ESPERANDO MÁS VELAS"
+        return "NEUTRAL ⚖️", "ESPERANDO MÁS VELAS"
 
     # Medias Móviles Exponenciales (EMA 9 y EMA 21)
     df['ema_fast'] = df['close'].ewm(span=9, adjust=False).mean()
@@ -57,12 +47,26 @@ def calculate_signal(df):
     last = df.iloc[-1]
     prev = df.iloc[-2]
 
-    # Criterio 1: Cruce de EMAs + Vela de confirmación
+    # Criterios principales de entrada
     ema_bullish = last['ema_fast'] > last['ema_slow']
     ema_bearish = last['ema_fast'] < last['ema_slow']
     candle_green = last['close'] > last['open']
     candle_red = last['close'] < last['open']
 
+    # --- DETECTOR DE RETROCESO / AGOTAMIENTO ---
+    candle_body = abs(last['close'] - last['open'])
+    upper_wick = last['high'] - max(last['close'], last['open'])
+    lower_wick = min(last['close'], last['open']) - last['low']
+
+    # Alerta 1: Agotamiento Alcista (Sombra superior larga en tendencia alcista)
+    if ema_bullish and upper_wick > (candle_body * 1.5) and upper_wick > 0:
+        return "🚨 VENDER/SALIR DE UP", "RECHAZO DE PRECIOS ALTOS (POSIBLE RETROCESO)"
+
+    # Alerta 2: Agotamiento Bajista (Sombra inferior larga en tendencia bajista)
+    if ema_bearish and lower_wick > (candle_body * 1.5) and lower_wick > 0:
+        return "🚨 VENDER/SALIR DE DOWN", "RECHAZO DE PRECIOS BAJOS (POSIBLE REBOTE)"
+
+    # --- SEÑALES ESTÁNDAR DE ENTRADA ---
     if ema_bullish and candle_green:
         return "COMPRAR UP 🚀", "TENDENCIA ALCISTA CONFIRMADA"
     elif ema_bearish and candle_red:
@@ -71,14 +75,14 @@ def calculate_signal(df):
         return "NEUTRAL ⚖️", "MERCADO SIN DIRECCIÓN CLARA"
 
 # ==========================================
-# 2. FEED EN TIEMPO REAL (Binance WebSocket)
+# FEED EN TIEMPO REAL (Binance WebSocket)
 # ==========================================
 async def btc_websocket_listener():
     global candles_1m
     while True:
         try:
             async with websockets.connect(BINANCE_WS) as ws:
-                print("🟢 Conectado al Feed de Precisión de Binance (BTC/USDT)...", flush=True)
+                print("🟢 Conectado al Feed de Binance con Alerta de Retroceso...", flush=True)
                 while True:
                     msg = await ws.recv()
                     data = json.loads(msg)
@@ -86,7 +90,6 @@ async def btc_websocket_listener():
                     kline = data.get('k', {})
                     is_candle_closed = kline.get('x', False)
 
-                    # Cuando la vela de 1 minuto se cierra oficialmente en Binance
                     if is_candle_closed:
                         open_p = float(kline['o'])
                         high_p = float(kline['h'])
@@ -103,10 +106,8 @@ async def btc_websocket_listener():
                         
                         candles_1m = pd.concat([candles_1m, new_row], ignore_index=True)
                         
-                        # Obtener recomendación
                         action, reason = calculate_signal(candles_1m)
                         
-                        # Impresión limpia y ultra precisa
                         print(f"[{t_stamp}] BTC: ${close_p:,.2f} | Apertura: ${open_p:,.2f} | ACCIÓN: {action} ({reason})", flush=True)
 
         except Exception as e:
@@ -114,11 +115,11 @@ async def btc_websocket_listener():
             await asyncio.sleep(5)
 
 # ==========================================
-# 3. BUCLE PRINCIPAL
+# BUCLE PRINCIPAL
 # ==========================================
 async def main():
     threading.Thread(target=run_http_server, daemon=True).start()
-    print("🚀 BOT CON ALTA PRECISIÓN INICIADO...", flush=True)
+    print("🚀 BOT CON PROTECCIÓN CONTRA RETROCESOS INICIADO...", flush=True)
     await btc_websocket_listener()
 
 if __name__ == "__main__":
