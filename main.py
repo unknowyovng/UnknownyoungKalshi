@@ -14,7 +14,7 @@ def health_check():
     return "OK - Bot Kalshi Activo", 200
 
 # ------------------------------------------
-# CONFIGURACIÓN DE DISCORD WEBHOOK (ACTUALIZADA)
+# CONFIGURACIÓN DE DISCORD WEBHOOK
 # ------------------------------------------
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1533385616140664992/k-Ibnna6ZiHxiP0qhR2Ol-aBwavpOUezSCL4jYcT4HE_non4BHCz7vW0Xsc1_8WMYfqU"
 
@@ -79,6 +79,7 @@ def fetch_candles():
     return None
 
 def evaluate_signals(df_1m):
+    global last_sent_action
     if df_1m is None or len(df_1m) < 5:
         return "NEUTRAL ⚖️", "Sin datos suficientes"
 
@@ -91,15 +92,19 @@ def evaluate_signals(df_1m):
 
     last = df_1m.iloc[-1]
 
-    # Evaluación de mechas
+    # Evaluación de mechas para Take Profit inteligente
     body = abs(last['close'] - last['open'])
     upper_wick = last['high'] - max(last['close'], last['open'])
     lower_wick = min(last['close'], last['open']) - last['low']
 
-    if upper_wick > (body * 1.3) and upper_wick > 0:
-        return "💰 CERRAR / PROFIT (UP)", f"Rechazo bajista en min {min_in_15}/15"
-    if lower_wick > (body * 1.3) and lower_wick > 0:
-        return "💰 CERRAR / PROFIT (DOWN)", f"Rechazo alcista en min {min_in_15}/15"
+    # Solo valida la mecha si supera $25 USD de rechazo (evita falsas alarmas por ruido)
+    if "DOWN" in last_sent_action:
+        if lower_wick > (body * 1.5) and lower_wick >= 25.0:
+            return "💰 CERRAR / PROFIT (DOWN)", f"Rechazo alcista fuerte (${lower_wick:.2f}) en min {min_in_15}/15"
+
+    if "UP" in last_sent_action:
+        if upper_wick > (body * 1.5) and upper_wick >= 25.0:
+            return "💰 CERRAR / PROFIT (UP)", f"Rechazo bajista fuerte (${upper_wick:.2f}) en min {min_in_15}/15"
 
     # Bloqueo en minutos finales de la vela de 15m
     if min_in_15 >= 13:
@@ -127,7 +132,6 @@ def bot_loop():
     global last_sent_action
     print("🚀 Bot iniciado con éxito.", flush=True)
     
-    # 1. Alerta de inicio con 4 argumentos exactos
     send_discord_alert(
         "🟢 BOT CONECTADO", 
         0, 
@@ -135,7 +139,6 @@ def bot_loop():
         datetime.now().strftime('%H:%M:%S')
     )
 
-    # 2. Bucle principal
     while True:
         try:
             df = fetch_candles()
