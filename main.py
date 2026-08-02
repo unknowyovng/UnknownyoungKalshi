@@ -3,6 +3,7 @@ import json
 import time
 import base64
 import os
+import sys
 import requests
 import websockets
 import pandas as pd
@@ -12,7 +13,7 @@ import threading
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 
-# Servidor HTTP ficticio para satisfacer a Render
+# Servidor HTTP ficticio para Render
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -23,6 +24,9 @@ def run_http_server():
     port = int(os.environ.get("PORT", 10000))
     server = HTTPServer(('0.0.0.0', port), SimpleHTTPRequestHandler)
     server.serve_forever()
+
+# Forzar salida en vivo en consola
+sys.stdout.reconfigure(line_buffering=True)
 
 # ==========================================
 # CONFIGURACIÓN Y CREDENCIALES
@@ -130,7 +134,6 @@ def generate_signals(df, timeframe="1m"):
     elif prev_row['ema_fast'] >= prev_row['ema_slow'] and last_row['ema_fast'] < last_row['ema_slow']:
         signal = "BEARISH"
 
-    print(f"[SEÑAL {timeframe}] {datetime.now().strftime('%H:%M:%S')} -> {signal} | Precio BTC: ${last_row['close']:,.2f}", flush=True)
     return signal
 
 # ==========================================
@@ -141,7 +144,7 @@ async def btc_websocket_listener():
     while True:
         try:
             async with websockets.connect(BINANCE_WS) as ws:
-                print("🟢 Conectado al Feed en Tiempo Real de Binance (BTC/USDT)...", flush=True)
+                print("🟢 Conectado al Feed en Tiempo Real de Binance.US (BTC/USDT)...", flush=True)
                 while True:
                     msg = await ws.recv()
                     data = json.loads(msg)
@@ -170,6 +173,7 @@ async def candle_builder_loop():
         await asyncio.sleep(60)
         
         if not ticks_buffer:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Esperando marcas de tiempo...", flush=True)
             continue
             
         df_ticks = pd.DataFrame(ticks_buffer)
@@ -189,6 +193,7 @@ async def candle_builder_loop():
         candles_1m = pd.concat([candles_1m, new_row], ignore_index=True)
         
         sig_1m = generate_signals(candles_1m, timeframe="1m")
+        print(f"[VELA 1M 📊] {datetime.now().strftime('%H:%M:%S')} | Cierre BTC: ${c_close:,.2f} | Señal: {sig_1m}", flush=True)
         
         if len(candles_1m) % 5 == 0:
             sub = candles_1m.iloc[-5:]
@@ -214,9 +219,7 @@ async def candle_builder_loop():
 # 6. BUCLE PRINCIPAL
 # ==========================================
 async def main():
-    # Iniciar servidor web falso para Render en segundo plano
     threading.Thread(target=run_http_server, daemon=True).start()
-    
     print("🚀 BOT INICIADO CORRECTAMENTE Y ESCUCHANDO A BINANCE...", flush=True)
     
     await asyncio.gather(
