@@ -1,12 +1,14 @@
 import os
 import time
 import requests
-from datetime import datetime
+from datetime import datetime, timezone
 
 # ==========================================
 # CONFIGURACIÓN Y VARIABLES DE ENTORNO
 # ==========================================
-DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "TU_WEBHOOK_AQUI")
+# Puedes pegar directamente tu URL entre las comillas si no usas variables en Render
+DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "PEGA_AQUI_TU_WEBHOOK_DE_DISCORD")
+
 DISTANCIA_MAXIMA_TARGET = 15.0  # Máxima distancia en USD permitida para entrar
 POLL_INTERVAL = 10              # Frecuencia de chequeo en segundos (10s)
 
@@ -18,7 +20,7 @@ last_sent_action = "NEUTRAL"
 # ==========================================
 def send_discord_alert(message):
     """Envía un mensaje o alerta al webhook de Discord."""
-    if not DISCORD_WEBHOOK_URL or DISCORD_WEBHOOK_URL == "TU_WEBHOOK_AQUI":
+    if not DISCORD_WEBHOOK_URL or "PEGA_AQUI" in DISCORD_WEBHOOK_URL:
         print("[DISCORD] Error: Webhook URL no configurada.")
         return
 
@@ -89,7 +91,8 @@ def main():
 
     while True:
         try:
-            now = datetime.utcnow()
+            # Uso de timezone UTC moderno para evitar DeprecationWarning
+            now = datetime.now(timezone.utc)
             current_minute = now.minute % 15  # Minuto relativo dentro de la vela de 15m
             
             btc_price = get_btc_price()
