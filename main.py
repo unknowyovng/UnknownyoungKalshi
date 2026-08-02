@@ -46,6 +46,7 @@ def send_discord_alert(msg):
 
 
 def get_btc_price():
+    """Obtiene el precio Spot actual de BTC desde Coinbase Ticker."""
     try:
         url = "https://api.exchange.coinbase.com/products/BTC-USD/ticker"
         res = requests.get(url, timeout=5).json()
@@ -55,8 +56,30 @@ def get_btc_price():
         return None
 
 
+def get_exact_kalshi_target_from_coinbase():
+    """
+    Obtiene el precio de cierre de la vela de 1 minuto recién completada en Coinbase,
+    que corresponde exactamente al 'Price to beat' que fija Kalshi a las :00.
+    """
+    try:
+        url = "https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=60"
+        res = requests.get(url, timeout=5).json()
+        if isinstance(res, list) and len(res) > 0:
+            # Ordenar velas por timestamp por si acaso
+            sorted_candles = sorted(res, key=lambda x: x[0], reverse=True)
+            # res[0] o sorted_candles[0] es la vela más reciente
+            # res[X][4] es el precio de CIERRE (Close)
+            return float(sorted_candles[0][4])
+    except Exception as e:
+        print(f"⚠️ Error al obtener cierre histórico de Coinbase: {e}")
+    return None
+
+
 def fetch_candle_open_price(candle_block, now):
-    """Obtiene la cotización exacta de apertura de la vela del bloque de 15m actual desde Coinbase."""
+    """
+    Obtiene la cotización de apertura de la vela del bloque de 15m actual
+    en caso de que el bot se reinicie a mitad de bloque.
+    """
     try:
         block_start_dt = now.replace(minute=(candle_block * 15), second=0, microsecond=0)
         block_start_ts = int(block_start_dt.timestamp())
@@ -69,7 +92,7 @@ def fetch_candle_open_price(candle_block, now):
             if target_candle:
                 return float(target_candle[3])  # Open price exacto
             
-            # Si no se encuentra exacta, usar la vela de inicio de bloque más cercana
+            # Buscar la más cercana
             sorted_candles = sorted(c_res, key=lambda x: x[0])
             for c in sorted_candles:
                 if c[0] >= block_start_ts:
@@ -99,7 +122,7 @@ def evaluate_market(current_price, target_price, current_minute):
         else:
             return "NEUTRAL", f"Sin tendencia clara (+${diff:.2f} del Target) | min {current_minute}/15"
     else:
-        # Minutos 0 a 4: Rupturas tempranas más sensibles (+$20 en lugar de +$35)
+        # Minutos 0 a 4: Rupturas tempranas muy sensibles (+$20 / -$20)
         if diff >= 20:
             return "COMPRAR UP", f"Ruptura Alcista Temprana (+${diff:.2f} sobre Target) | min {current_minute}/15"
         elif diff <= -20:
@@ -126,18 +149,23 @@ def main():
             btc_price = get_btc_price()
 
             if btc_price is not None:
-                # Fijar Target al inicio de vela o si el bot acaba de iniciar
+                # Fijar Target al inicio del nuevo bloque o si el bot recién arranca
                 if candle_block != last_candle_block or current_target_price is None:
-                    # Si es el inicio de la vela (minuto 0)
                     if current_minute == 0:
-                        current_target_price = btc_price
-                        print(f"📌 [TARGET APERTURA FIJADO]: ${current_target_price:.2f} para bloque {candle_block * 15}m")
+                        # Obtener el precio de cierre exacto de la vela previa (método Kalshi)
+                        exact_target = get_exact_kalshi_target_from_coinbase()
+                        if exact_target is not None:
+                            current_target_price = exact_target
+                            print(f"📌 [TARGET KALSHI EXACTO FIJADO]: ${current_target_price:.2f} para bloque {candle_block * 15}m")
+                        else:
+                            current_target_price = btc_price
+                            print(f"📌 [TARGET SPOT RESPALDO FIJADO]: ${current_target_price:.2f} para bloque {candle_block * 15}m")
                     else:
-                        # Si entra a mitad de bloque, busca el Open exacto del minuto :00
+                        # Si entra a mitad de bloque, busca el Open exacto del inicio del bloque
                         open_price = fetch_candle_open_price(candle_block, now)
                         if open_price is not None:
                             current_target_price = open_price
-                            print(f"📌 [TARGET APERTURA HISTÓRICA FIJADO]: ${current_target_price:.2f} para bloque {candle_block * 15}m")
+                            print(f"📌 [TARGET HISTÓRICO REINICIO FIJADO]: ${current_target_price:.2f} para bloque {candle_block * 15}m")
                         else:
                             current_target_price = btc_price
                             print(f"📌 [TARGET SPOT RESPALDO FIJADO]: ${current_target_price:.2f} para bloque {candle_block * 15}m")
