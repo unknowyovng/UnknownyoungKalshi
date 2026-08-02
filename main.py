@@ -1,20 +1,37 @@
 import os
 import asyncio
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 import discord
 from discord.ext import commands
+
+# ==========================================
+# 0. SERVIDOR WEB PARA SATISFACER A RENDER
+# ==========================================
+class DummyHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot activo")
+
+def run_dummy_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), DummyHandler)
+    server.serve_forever()
+
+# Iniciar servidor web en un hilo secundario
+threading.Thread(target=run_dummy_server, daemon=True).start()
 
 # ==========================================
 # 1. CONFIGURACIÓN DE INTENTS DE DISCORD
 # ==========================================
 intents = discord.Intents.default()
-# Requisito obligatorio para leer mensajes como '!target'
-intents.message_content = True  
+intents.message_content = True  # Obligatorio para leer comandos como !target
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Variables globales para el manejo del Target
-manual_target = None  # Almacena el target fijado manualmente por comando
-modo_manual = False   # Indica si está activo el modo manual
+manual_target = None
+modo_manual = False
 
 # ==========================================
 # 2. EVENTOS DEL BOT
@@ -26,15 +43,12 @@ async def on_ready():
 
 @bot.event
 async def on_message(message):
-    # Evitar que el bot responda a sus propios mensajes
     if message.author == bot.user:
         return
 
-    # Imprimir en consola para depuración de mensajes recibidos
     if message.content.startswith("!"):
         print(f"📩 Comando detectado de {message.author}: {message.content}")
 
-    # CRUCIAL: Permite que los comandos (@bot.command) se procesen si hay un evento on_message
     await bot.process_commands(message)
 
 # ==========================================
@@ -56,7 +70,6 @@ async def set_target(ctx, valor: str = None):
         print("🔄 Target cambiado a MODO AUTOMÁTICO.")
     else:
         try:
-            # Limpiar comas o signos por si se ingresan de más
             valor_limpio = valor.replace(",", "").replace("$", "")
             precio = float(valor_limpio)
             
@@ -66,58 +79,16 @@ async def set_target(ctx, valor: str = None):
             await ctx.send(f"🎯 **Target fijado manualmente en:** `${manual_target:.2f}`")
             print(f"📌 Target fijado manualmente en: {manual_target}")
         except ValueError:
-            await ctx.send("❌ **Error:** Por favor ingresa un número válido. Ejemplo: `!target 63470.00`")
+            await ctx.send("❌ **Error:** Formato incorrecto. Ejemplo: `!target 63629.00`")
 
 # ==========================================
-# 4. LÓGICA DE OBTENCIÓN DEL TARGET
-# ==========================================
-def obtener_target_actual(target_calculado_auto):
-    """
-    Retorna el target manual si está activo, 
-    o el target calculado automáticamente por el script.
-    """
-    global manual_target, modo_manual
-    
-    if modo_manual and manual_target is not None:
-        return manual_target
-    return target_calculado_auto
-
-# ==========================================
-# 5. BUCLE PRINCIPAL / MONITOREO (EJEMPLO)
-# ==========================================
-async def ciclo_monitoreo():
-    await bot.wait_until_ready()
-    while not bot.is_closed():
-        try:
-            # 1. Obtener precio actual de BTC y calcular target automático
-            # (Reemplaza con tu función real de obtención de datos)
-            precio_btc = 63468.01 
-            target_auto = 63456.97 
-
-            # 2. Determinar qué target usar (Manual o Auto)
-            target_a_vencer = obtener_target_actual(target_auto)
-
-            # 3. Tu lógica de señales...
-            # print(f"Analizando... Precio: {precio_btc} | Target Activo: {target_a_vencer}")
-
-        except Exception as e:
-            print(f"⚠️ Error en ciclo de monitoreo: {e}")
-            
-        await asyncio.sleep(15)  # Revisa cada 15 segundos
-
-# ==========================================
-# 6. INICIALIZACIÓN
+# 4. INICIALIZACIÓN
 # ==========================================
 async def main():
     async with bot:
-        # Iniciar la tarea en segundo plano junto con el bot
-        bot.loop.create_task(ciclo_monitoreo())
-        
-        # Cargar token de la variable de entorno de Render
         token = os.environ.get("DISCORD_BOT_TOKEN")
         if not token:
-            raise ValueError("❌ No se encontró la variable DISCORD_BOT_TOKEN en el entorno.")
-            
+            raise ValueError("❌ Falta la variable DISCORD_BOT_TOKEN en Render.")
         await bot.start(token)
 
 if __name__ == "__main__":
