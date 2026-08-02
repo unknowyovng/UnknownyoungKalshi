@@ -223,6 +223,7 @@ def main():
         except Exception as e:
             print(f"❌ ERROR EN BUCLE PRINCIPAL: {e}")
 
-        time.sleep(10)
-        if __name__ == "__main__":
+       time.sleep(POLL_INTERVAL)
+
+if __name__ == "__main__":
     main()
