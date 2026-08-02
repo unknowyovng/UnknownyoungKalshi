@@ -13,11 +13,15 @@ import threading
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 
-# Servidor HTTP ficticio para Render
+# Servidor HTTP ficticio para Render (Compatible con UptimeRobot)
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
+    def do_HEAD(self):
         self.send_response(200)
+        self.send_header("Content-type", "text/html")
         self.end_headers()
+
+    def do_GET(self):
+        self.do_HEAD()
         self.wfile.write(b"Bot activo y funcionando en vivo.")
 
 def run_http_server():
