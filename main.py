@@ -115,7 +115,7 @@ async def fetch_latest_news():
 # 3. GENERADOR DE SEÑALES TÉCNICAS
 # ==========================================
 def generate_signals(df, timeframe="1m"):
-    if len(df) < 21:
+    if len(df) < 2:
         return "NEUTRAL"
 
     df['ema_fast'] = df['close'].ewm(span=9, adjust=False).mean()
