@@ -8,7 +8,6 @@ from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
-# Servidor HTTP ficticio para Render (Compatible con UptimeRobot)
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_HEAD(self):
         self.send_response(200)
@@ -17,19 +16,16 @@ class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         self.do_HEAD()
-        self.wfile.write(b"Bot activo y funcionando en vivo con Feed Coinbase/Kalshi.")
+        self.wfile.write(b"Bot activo en Modo Maximas Entradas de Intervalo (15m/Kalshi).")
 
 def run_http_server():
     port = int(os.environ.get("PORT", 10000))
     server = HTTPServer(('0.0.0.0', port), SimpleHTTPRequestHandler)
     server.serve_forever()
 
-# Forzar salida en vivo en consola
 sys.stdout.reconfigure(line_buffering=True)
 
-# WS oficial de Coinbase Pro (Índice directo de Kalshi)
 COINBASE_WS = "wss://ws-feed.exchange.coinbase.com"
-
 candles_1m = pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 current_minute_ticks = []
 
@@ -52,22 +48,27 @@ def resample_candles(df, timeframe='15min'):
     return resampled
 
 # ==========================================
-# EVALUADOR PRO CON ENFOQUE EN KALSHI Y PROFIT RÁPIDO
+# EVALUADOR DE MULTI-ENTRADAS POR INTERVALO
 # ==========================================
-def calculate_pro_signal(df_1m):
-    if len(df_1m) < 15:
-        return "NEUTRAL ⚖️", "ACUMULANDO VELAS DE COINBASE PARA 15M"
+def calculate_interval_signals(df_1m):
+    if len(df_1m) < 5:
+        return "NEUTRAL ⚖️", "RECOLECTANDO VELAS INICIALES"
+
+    now = datetime.now()
+    minute_of_hour = now.minute
+    
+    # Identificar en qué intervalo de 15 min estamos (0, 15, 30, 45)
+    interval_start_min = (minute_of_hour // 15) * 15
+    minute_in_interval = minute_of_hour - interval_start_min  # Va de 0 a 14
 
     df_15m = resample_candles(df_1m, '15min')
 
     df_1m['ema9'] = df_1m['close'].ewm(span=9, adjust=False).mean()
     df_1m['ema21'] = df_1m['close'].ewm(span=21, adjust=False).mean()
     
-    avg_vol = df_1m['volume'].tail(10).mean()
     last_1m = df_1m.iloc[-1]
     
-    high_volume = last_1m['volume'] > (avg_vol * 2.0)
-
+    # Evaluación de Tendencia Base de 15 Minutos
     trend_15m = "NEUTRAL"
     if not df_15m.empty and len(df_15m) >= 2:
         df_15m['ema9'] = df_15m['close'].ewm(span=9, adjust=False).mean()
@@ -82,37 +83,46 @@ def calculate_pro_signal(df_1m):
     upper_wick = last_1m['high'] - max(last_1m['close'], last_1m['open'])
     lower_wick = min(last_1m['close'], last_1m['open']) - last_1m['low']
 
-    # --- REGLAS DE SALIDA PREVENTIVA / TOMAR PROFIT ---
+    # --- ALERTAS DE SALIDA Y PROFIT (RECHAZO) ---
     if upper_wick > (body * 1.3) and upper_wick > 0:
-        return "💰 CERRAR / TOMAR PROFIT (UP)", "RECHAZO DE ALTOS EN COINBASE - ASEGURA PROFIT"
+        return "💰 CERRAR / TOMAR PROFIT (UP)", f"AGOTAMIENTO EN MINUTO {minute_in_interval}/15 DE BLOQUE"
     
     if lower_wick > (body * 1.3) and lower_wick > 0:
-        return "💰 CERRAR / TOMAR PROFIT (DOWN)", "RECHAZO DE BAJOS EN COINBASE - ASEGURA PROFIT"
+        return "💰 CERRAR / TOMAR PROFIT (DOWN)", f"AGOTAMIENTO EN MINUTO {minute_in_interval}/15 DE BLOQUE"
 
-    # --- ENTRADAS FILTRADAS ---
-    ema_bull_1m = last_1m['ema9'] > last_1m['ema21']
-    ema_bear_1m = last_1m['ema9'] < last_1m['ema21']
-    green_candle = last_1m['close'] > last_1m['open']
-    red_candle = last_1m['close'] < last_1m['open']
+    # --- LÓGICA DE MAXIMIZACIÓN DE ENTRADAS ---
+    ema_bull = last_1m['ema9'] > last_1m['ema21']
+    ema_bear = last_1m['ema9'] < last_1m['ema21']
+    green = last_1m['close'] > last_1m['open']
+    red = last_1m['close'] < last_1m['open']
 
-    if ema_bull_1m and green_candle:
-        if trend_15m == "ALCISTA" or high_volume:
-            conf = "CONFIRMADO EN 15M (RETIRARSE CON PROFIT)"
-            return "COMPRAR UP 🚀", conf
+    # Fase 1: Inicio de Intervalo (Minuto 0 a 3) -> Entrada de Alta Prioridad
+    if minute_in_interval <= 3:
+        if ema_bull and green:
+            return "🔥 INICIO BLOQUE: COMPRAR UP 🚀", f"APERTURA INTERVALO {interval_start_min}m"
+        elif ema_bear and red:
+            return "🔥 INICIO BLOQUE: COMPRAR DOWN 📉", f"APERTURA INTERVALO {interval_start_min}m"
+
+    # Fase 2: Mitad de Intervalo (Minuto 4 a 10) -> Re-entrada / Scalping
+    elif 4 <= minute_in_interval <= 10:
+        if ema_bull and green and trend_15m == "ALCISTA":
+            return "⚡ RE-ENTRADA: COMPRAR UP 🚀", f"IMPULSO MID-INTERVALO ({minute_in_interval}m)"
+        elif ema_bear and red and trend_15m == "BAJISTA":
+            return "⚡ RE-ENTRADA: COMPRAR DOWN 📉", f"IMPULSO MID-INTERVALO ({minute_in_interval}m)"
+
+    # Fase 3: Final del Intervalo (Minuto 11 a 14) -> Filtrado estricto para evitar atrapadas
+    elif minute_in_interval >= 11:
+        if ema_bull and green and (last_1m['close'] > df_1m['high'].tail(5).max()):
+            return "🎯 ULTIMO IMPULSO: COMPRAR UP 🚀", "ROMPIMIENTO DE CERRADO DE BLOQUE"
+        elif ema_bear and red and (last_1m['close'] < df_1m['low'].tail(5).min()):
+            return "🎯 ULTIMO IMPULSO: COMPRAR DOWN 📉", "ROMPIMIENTO DE CERRADO DE BLOQUE"
         else:
-            return "NEUTRAL ⚖️", "1M ALCISTA PERO 15M SIN CONFIRMACIÓN"
+            return "⚠️ ZONA FINAL DE BLOQUE", "PREPARANDO PRÓXIMO CONTRATO DE 15M"
 
-    if ema_bear_1m and red_candle:
-        if trend_15m == "BAJISTA" or high_volume:
-            conf = "CONFIRMADO EN 15M (RETIRARSE CON PROFIT)"
-            return "COMPRAR DOWN 📉", conf
-        else:
-            return "NEUTRAL ⚖️", "1M BAJISTA PERO 15M SIN CONFIRMACIÓN"
-
-    return "NEUTRAL ⚖️", "MERCADO SIN TENDENCIA EN COINBASE"
+    return "NEUTRAL ⚖️", f"SIN PATRÓN EN MINUTO {minute_in_interval}/15"
 
 # ==========================================
-# FEED COINBASE WEBSOCKET (ÍNDICE REAL KALSHI)
+# FEED COINBASE WEBSOCKET
 # ==========================================
 async def coinbase_websocket_listener():
     global candles_1m, current_minute_ticks
@@ -127,7 +137,7 @@ async def coinbase_websocket_listener():
         try:
             async with websockets.connect(COINBASE_WS) as ws:
                 await ws.send(json.dumps(subscribe_msg))
-                print("🟢 Conectado al Feed de Coinbase (Sincronización 1:1 con Kalshi)...", flush=True)
+                print("🟢 Conectado al Feed de Coinbase (Modo Máxima Frecuencia 15m)...", flush=True)
                 
                 last_minute = datetime.now().minute
                 
@@ -142,7 +152,6 @@ async def coinbase_websocket_listener():
                         
                         current_minute_ticks.append({'price': price, 'size': size})
                         
-                        # Al cambiar de minuto, se consolida la vela oficial
                         if now.minute != last_minute:
                             if current_minute_ticks:
                                 prices = [t['price'] for t in current_minute_ticks]
@@ -160,9 +169,9 @@ async def coinbase_websocket_listener():
                                 }])
                                 
                                 candles_1m = pd.concat([candles_1m, new_row], ignore_index=True)
-                                action, reason = calculate_pro_signal(candles_1m)
+                                action, reason = calculate_interval_signals(candles_1m)
                                 
-                                print(f"[{t_stamp}] BTC Index (Kalshi): ${close_p:,.2f} | Apertura: ${open_p:,.2f} | ACCIÓN: {action} ({reason})", flush=True)
+                                print(f"[{t_stamp}] BTC Kalshi: ${close_p:,.2f} | ACCIÓN: {action} ({reason})", flush=True)
 
                                 current_minute_ticks = []
                             
@@ -177,7 +186,7 @@ async def coinbase_websocket_listener():
 # ==========================================
 async def main():
     threading.Thread(target=run_http_server, daemon=True).start()
-    print("🚀 BOT CON FEED DE PRECISIÓN KALSHI / COINBASE INICIADO...", flush=True)
+    print("🚀 BOT DE MÁXIMAS ENTRADAS POR INTERVALO INICIADO...", flush=True)
     await coinbase_websocket_listener()
 
 if __name__ == "__main__":
