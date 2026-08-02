@@ -1,0 +1,224 @@
+import asyncio
+import json
+import time
+import base64
+import requests
+import websockets
+import pandas as pd
+from datetime import datetime
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding
+
+# ==========================================
+# CONFIGURACIÓN Y CREDENCIALES
+# ==========================================
+BINANCE_WS = "wss://stream.binance.com:9443/ws/btcusdt@trade"
+KALSHI_BASE_URL = "https://trading-api.kalshi.com/trade-api/v2"  # O demo: https://demo-api.kalshi.co
+KALSHI_API_KEY_ID = "TU_KALSHI_KEY_ID"
+PRIVATE_KEY_PATH = "private_key.pem"
+NEWS_API_URL = "https://cryptopanic.com/api/v1/posts/?auth_token=TU_TOKEN&currencies=BTC"
+
+# Umbral para detectar compras/ventas "Ballena" en USD
+WHALE_THRESHOLD_USD = 100000 
+
+# Buffers en memoria para construir las velas
+candles_1m = pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+candles_5m = pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+ticks_buffer = []
+
+# ==========================================
+# 1. AUTENTICACIÓN Y ÓRDENES EN KALSHI (RSA)
+# ==========================================
+def load_private_key(file_path):
+    """Carga la clave privada RSA desde el archivo .pem"""
+    try:
+        with open(file_path, "rb") as key_file:
+            return serialization.load_pem_private_key(key_file.read(), password=None)
+    except Exception as e:
+        print(f"[ERROR CLAVE KALSHI]: No se pudo cargar {file_path} -> {e}")
+        return None
+
+def sign_kalshi_request(private_key, method, path, timestamp):
+    """Genera la firma criptográfica requerida por la API de Kalshi"""
+    path_clean = path.split('?')[0]
+    msg = f"{timestamp}{method}{path_clean}"
+    signature = private_key.sign(
+        msg.encode('utf-8'),
+        padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.DIGEST_LENGTH),
+        hashes.SHA256()
+    )
+    return base64.b64encode(signature).decode('utf-8')
+
+def send_kalshi_order(ticker, side, count=1, action='buy'):
+    """Envía una orden al mercado de predicción de Kalshi"""
+    path = "/trade-api/v2/portfolio/orders"
+    timestamp = str(int(time.time() * 1000))
+    private_key = load_private_key(PRIVATE_KEY_PATH)
+    
+    if not private_key:
+        print("[KALSHI OMITIDO]: Sin clave RSA configurada.")
+        return
+
+    sig = sign_kalshi_request(private_key, "POST", path, timestamp)
+
+    headers = {
+        "KALSHI-ACCESS-KEY": KALSHI_API_KEY_ID,
+        "KALSHI-ACCESS-SIGNATURE": sig,
+        "KALSHI-ACCESS-TIMESTAMP": timestamp,
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "ticker": ticker,
+        "action": action,
+        "type": "market",
+        "side": side,
+        "count": count
+    }
+
+    try:
+        res = requests.post(KALSHI_BASE_URL + path, headers=headers, json=payload)
+        print(f"[KALSHI ORDER] Respuesta ({res.status_code}): {res.json()}")
+    except Exception as e:
+        print(f"[ERROR KALSHI ORDER]: {e}")
+
+# ==========================================
+# 2. EVALUADOR DE NOTICIAS
+# ==========================================
+async def fetch_latest_news():
+    """Consulta CryptoPanic para evaluar el sentimiento de mercado."""
+    try:
+        res = requests.get(NEWS_API_URL, timeout=5)
+        if res.status_code == 200:
+            posts = res.json().get('results', [])
+            if posts:
+                latest = posts[0]
+                votes = latest.get('votes', {})
+                bullish = votes.get('bullish', 0)
+                bearish = votes.get('bearish', 0)
+                print(f"[NOTICIAS 🗞️] '{latest.get('title', '')[:50]}...' | Bullish: {bullish} - Bearish: {bearish}")
+                return "BULL" if bullish > bearish else ("BEAR" if bearish > bullish else "NEUTRAL")
+    except Exception as e:
+        print(f"[ERROR NOTICIAS]: {e}")
+    return "NEUTRAL"
+
+# ==========================================
+# 3. GENERADOR DE SEÑALES TÉCNICAS
+# ==========================================
+def generate_signals(df, timeframe="1m"):
+    """Calcula cruces de medias móviles exponenciales (EMA 9 vs EMA 21)"""
+    if len(df) < 21:
+        return "NEUTRAL"
+
+    df['ema_fast'] = df['close'].ewm(span=9, adjust=False).mean()
+    df['ema_slow'] = df['close'].ewm(span=21, adjust=False).mean()
+    
+    last_row = df.iloc[-1]
+    prev_row = df.iloc[-2]
+
+    signal = "NEUTRAL"
+    if prev_row['ema_fast'] <= prev_row['ema_slow'] and last_row['ema_fast'] > last_row['ema_slow']:
+        signal = "BULLISH"
+    elif prev_row['ema_fast'] >= prev_row['ema_slow'] and last_row['ema_fast'] < last_row['ema_slow']:
+        signal = "BEARISH"
+
+    print(f"[SEÑAL {timeframe}] {datetime.now().strftime('%H:%M:%S')} -> {signal} | Precio BTC: ${last_row['close']:,.2f}")
+    return signal
+
+# ==========================================
+# 4. FEED EN TIEMPO REAL (Binance WebSocket)
+# ==========================================
+async def btc_websocket_listener():
+    global ticks_buffer
+    while True:
+        try:
+            async with websockets.connect(BINANCE_WS) as ws:
+                print("🟢 Conectado al Feed en Tiempo Real de Binance (BTC/USDT)...")
+                while True:
+                    msg = await ws.recv()
+                    data = json.loads(msg)
+                    
+                    price = float(data['p'])
+                    quantity = float(data['q'])
+                    usd_val = price * quantity
+                    is_seller = data['m']
+
+                    # Alerta de transacciones Grandes (Ballenas)
+                    if usd_val >= WHALE_THRESHOLD_USD:
+                        action = "🔴 VENTA BALLENA" if is_seller else "🟢 COMPRA BALLENA"
+                        print(f"[BALLENA 🐋] {action} | Monto: ${usd_val:,.2f} | BTC: ${price:,.2f}")
+
+                    ticks_buffer.append({'timestamp': time.time(), 'price': price, 'volume': quantity})
+        except Exception as e:
+            print(f"[RECONECTANDO WEBSOCKET]: {e}")
+            await asyncio.sleep(5)
+
+# ==========================================
+# 5. CONSTRUCTOR DE VELAS Y EVALUADOR DE TRADES
+# ==========================================
+async def candle_builder_loop():
+    global ticks_buffer, candles_1m, candles_5m
+    
+    while True:
+        await asyncio.sleep(60)  # Procesa cada 60 segundos
+        
+        if not ticks_buffer:
+            continue
+            
+        df_ticks = pd.DataFrame(ticks_buffer)
+        ticks_buffer = []  # Limpia el buffer acumulado
+        
+        c_open = df_ticks['price'].iloc[0]
+        c_high = df_ticks['price'].max()
+        c_low = df_ticks['price'].min()
+        c_close = df_ticks['price'].iloc[-1]
+        c_vol = df_ticks['volume'].sum()
+        
+        new_row = pd.DataFrame([{
+            'timestamp': time.time(), 'open': c_open, 'high': c_high, 
+            'low': c_low, 'close': c_close, 'volume': c_vol
+        }])
+        
+        candles_1m = pd.concat([candles_1m, new_row], ignore_index=True)
+        
+        # Evalúa señales a 1m
+        sig_1m = generate_signals(candles_1m, timeframe="1m")
+        
+        # Cada 5 minutos procesa la vela de 5m
+        if len(candles_1m) % 5 == 0:
+            sub = candles_1m.iloc[-5:]
+            row_5m = pd.DataFrame([{
+                'timestamp': time.time(),
+                'open': sub['open'].iloc[0],
+                'high': sub['high'].max(),
+                'low': sub['low'].min(),
+                'close': sub['close'].iloc[-1],
+                'volume': sub['volume'].sum()
+            }])
+            candles_5m = pd.concat([candles_5m, row_5m], ignore_index=True)
+            
+            sig_5m = generate_signals(candles_5m, timeframe="5m")
+            news_sentiment = await fetch_latest_news()
+            
+            # Decisión de Trade para Kalshi a 15 Minutos
+            if sig_1m == "BULLISH" and sig_5m == "BULLISH" and news_sentiment != "BEAR":
+                print("[EJECUCIÓN 🚀] Confirmación Alcista (1m+5m) -> Comprando 'YES' en Kalshi")
+                # send_kalshi_order(ticker="KXBTC-TICKER-ACTUAL", side="yes", count=1)
+            elif sig_1m == "BEARISH" and sig_5m == "BEARISH" and news_sentiment != "BULL":
+                print("[EJECUCIÓN 📉] Confirmación Bajista (1m+5m) -> Comprando 'NO' en Kalshi")
+                # send_kalshi_order(ticker="KXBTC-TICKER-ACTUAL", side="no", count=1)
+
+# ==========================================
+# 6. BUCLE PRINCIPAL
+# ==========================================
+async def main():
+    await asyncio.gather(
+        btc_websocket_listener(),
+        candle_builder_loop()
+    )
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("Bot detenido.")
