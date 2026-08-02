@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 # ==========================================
 # CONFIGURACIÓN Y VARIABLES DE ENTORNO
 # ==========================================
-# Puedes pegar directamente tu URL entre las comillas si no usas variables en Render
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "PEGA_AQUI_TU_WEBHOOK_DE_DISCORD")
 
 DISTANCIA_MAXIMA_TARGET = 15.0  # Máxima distancia en USD permitida para entrar
@@ -14,6 +13,8 @@ POLL_INTERVAL = 10              # Frecuencia de chequeo en segundos (10s)
 
 # Estado global del bot
 last_sent_action = "NEUTRAL"
+current_target_price = None     # Se actualiza automáticamente al inicio de cada vela de 15m
+last_candle_block = -1
 
 # ==========================================
 # FUNCIONES AUXILIARES
@@ -42,13 +43,6 @@ def get_btc_price():
         print(f"[PRECIO ERROR]: Error consultando la API: {e}")
         return None
 
-def get_kalshi_target_price():
-    """
-    Sustituye esta función si obtienes el Target directamente de la API de Kalshi.
-    Por defecto devuelve None si no está integrado aún.
-    """
-    return None 
-
 # ==========================================
 # EVALUACIÓN DE SEÑALES Y REGLAS DE NEGOCIO
 # ==========================================
@@ -60,9 +54,9 @@ def evaluate_market(current_price, target_price, current_minute):
     if current_minute >= 13:
         return "NEUTRAL", "Final de bloque (Cuota baja / Cooldown)"
 
-    # 2. Si no hay Target configurado en la API, retornamos estado de espera
+    # 2. Si aún no se ha fijado el Target del bloque
     if target_price is None:
-        return "NEUTRAL", "Esperando confirmación / Target no configurado"
+        return "NEUTRAL", "Esperando fijar Target Price del bloque"
 
     distancia = target_price - current_price
 
@@ -70,39 +64,47 @@ def evaluate_market(current_price, target_price, current_minute):
     if distancia > DISTANCIA_MAXIMA_TARGET and current_minute > 3:
         return "NEUTRAL", f"Distancia al Target muy alta (${distancia:.2f})"
 
-    # 4. Condición de Entrada UP
+    # 4. Condición de Entrada UP (Precio supera o está pegado al Target)
     if current_price >= (target_price - 5.0):
-        return "COMPRAR UP", f"Impulso continuo (min {current_minute}/15)"
+        return "COMPRAR UP", f"Impulso continuo (min {current_minute}/15 | Target: ${target_price:.2f})"
     
-    # 5. Condición de Entrada DOWN
+    # 5. Condición de Entrada DOWN (Precio cae por debajo del filtro)
     elif current_price <= (target_price - DISTANCIA_MAXIMA_TARGET):
-        return "COMPRAR DOWN", f"Tendencia bajista (min {current_minute}/15)"
+        return "COMPRAR DOWN", f"Tendencia bajista (min {current_minute}/15 | Target: ${target_price:.2f})"
 
-    return "NEUTRAL", "Mercado lateral / Sin volumen suficiente"
+    return "NEUTRAL", f"Mercado lateral / Cerca de Target (${target_price:.2f})"
 
 # ==========================================
 # BUCLE PRINCIPAL (MAIN LOOP)
 # ==========================================
 def main():
-    global last_sent_action
+    global last_sent_action, current_target_price, last_candle_block
     
     print("🚀 Bot Kalshi 15m iniciado con éxito.")
     send_discord_alert("🟢 **BOT CONECTADO**\nBot iniciado correctamente y monitoreando mercado.")
 
     while True:
         try:
-            # Uso de timezone UTC moderno para evitar DeprecationWarning
             now = datetime.now(timezone.utc)
-            current_minute = now.minute % 15  # Minuto relativo dentro de la vela de 15m
+            current_minute = now.minute % 15   # Minuto relativo (0 a 14)
+            candle_block = now.minute // 15     # Identificador de bloque (0, 1, 2, 3)
             
             btc_price = get_btc_price()
-            target_price = get_kalshi_target_price()
 
             if btc_price is not None:
-                current_action, detail = evaluate_market(btc_price, target_price, current_minute)
+                # AUTOMATIZACIÓN DEL TARGET PRICE:
+                # Si entramos en un nuevo bloque de 15m (minutos :00, :15, :30, :45),
+                # fijamos el precio actual como el 'Price to beat' para los próximos 15 minutos.
+                if candle_block != last_candle_block or current_target_price is None:
+                    current_target_price = btc_price
+                    last_candle_block = candle_block
+                    last_sent_action = "NEUTRAL"  # Reiniciar estado para el nuevo ciclo
+                    print(f"🎯 [NUEVO TARGET FIJADO]: ${current_target_price:.2f} para el bloque {candle_block * 15}m")
+
+                current_action, detail = evaluate_market(btc_price, current_target_price, current_minute)
 
                 # Log en consola de Render
-                print(f"[{now.strftime('%H:%M:%S')}] BTC: ${btc_price:.2f} | ACCIÓN: {current_action} ({detail})")
+                print(f"[{now.strftime('%H:%M:%S')}] BTC: ${btc_price:.2f} | Target: ${current_target_price:.2f} | ACCIÓN: {current_action} ({detail})")
 
                 # ----------------------------------------------------
                 # LÓGICA DE ALERTAS A DISCORD
@@ -115,6 +117,7 @@ def main():
                         f"🚨 **SEÑAL KALSHI BTC 15M** 🚨\n"
                         f"**Acción:** 🔥 {current_action} {emoji}\n"
                         f"**Precio BTC:** ${btc_price:.2f}\n"
+                        f"**Target a Vencer:** ${current_target_price:.2f}\n"
                         f"**Hora:** {now.strftime('%H:%M:%S')} UTC\n"
                         f"**Detalle:** {detail}"
                     )
@@ -126,6 +129,7 @@ def main():
                     msg = (
                         f"⚠️ **INVALIDACIÓN / CERRAR POSICIÓN** ⚠️\n"
                         f"**Precio BTC:** ${btc_price:.2f}\n"
+                        f"**Target:** ${current_target_price:.2f}\n"
                         f"**Hora:** {now.strftime('%H:%M:%S')} UTC\n"
                         f"**Motivo:** El mercado perdió fuerza o cambió de tendencia. Vende o sal del contrato ahora."
                     )
