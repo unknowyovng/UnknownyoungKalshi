@@ -102,25 +102,22 @@ def main():
             if btc_price is not None:
                 # Fijar Target al inicio de cada vela de 15m o en un reinicio
                 if candle_block != last_candle_block or current_target_price is None:
-                    if current_minute == 0:
-                        current_target_price = btc_price
-                    else:
-                        # Si el bot se reinició a mitad de bloque, obtenemos la vela del inicio exacto (1m)
-                        try:
-                            time.sleep(3)  # Espera breve para asegurar sincronización en API
-                            
-                            # Pedimos vela de 1 minuto (granularity=60) para precisión
-                            candles_url = "https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=60"
-                            c_res = requests.get(candles_url, timeout=5).json()
+                    try:
+                        # Pausa táctica de 4 segundos para que Coinbase procese la apertura oficial de la vela
+                        time.sleep(4)
+                        
+                        # Consultar la vela de 1 minuto para obtener el 'Open' exacto
+                        candles_url = "https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=60"
+                        c_res = requests.get(candles_url, timeout=5).json()
 
-                            if isinstance(c_res, list) and len(c_res) > 0:
-                                # Toma el precio de apertura (Open) de la vela más reciente consolidada
-                                current_target_price = float(c_res[0][3])
-                            else:
-                                current_target_price = btc_price
-                        except Exception as e:
-                            print(f"⚠️ No se pudo obtener vela de apertura, usando precio actual: {e}")
+                        if isinstance(c_res, list) and len(c_res) > 0:
+                            # c_res[0][3] es el precio de apertura (Open) de la vela más reciente
+                            current_target_price = float(c_res[0][3])
+                        else:
                             current_target_price = btc_price
+                    except Exception as e:
+                        print(f"⚠️ No se pudo obtener vela de apertura, usando precio actual: {e}")
+                        current_target_price = btc_price
 
                     last_candle_block = candle_block
                     last_sent_action = "NEUTRAL"
