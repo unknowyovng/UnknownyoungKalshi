@@ -6,7 +6,8 @@ import websockets
 import pandas as pd
 import requests
 from datetime import datetime
-from flask import Flask
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import os
 
 # ==========================================
 # CONFIGURACIÓN DE DISCORD WEBHOOK
@@ -15,16 +16,28 @@ DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1533349076593283252/QPKK
 
 sys.stdout.reconfigure(line_buffering=True)
 
-# SERVIDOR WEB CON FLASK (Para complacer a Render)
-app = Flask(__name__)
+# SERVIDOR HTTP NATIVO (Usa la librería estándar de Python, sin depender de Flask)
+class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"Bot Kalshi-Coinbase Activo 24/7")
 
-@app.route('/')
-def home():
-    return "Bot Kalshi-Coinbase Activo y Funcionando 24/7", 200
+    def do_HEAD(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
 
-@app.route('/health')
-def health():
-    return "OK", 200
+    def log_message(self, format, *args):
+        # Desactiva logs de peticiones HTTP periódicas para no saturar la consola
+        return
+
+def run_http_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(('0.0.0.0', port), SimpleHTTPRequestHandler)
+    print(f"🌐 Servidor Web escuchando en puerto {port}...", flush=True)
+    server.serve_forever()
 
 def send_discord_alert(action, price, reason, timestamp):
     if not DISCORD_WEBHOOK_URL:
@@ -225,11 +238,8 @@ def start_bot_thread():
     asyncio.set_event_loop(loop)
     loop.run_until_complete(coinbase_websocket_listener())
 
-# Iniciar el bot en un hilo secundario
-bot_thread = threading.Thread(target=start_bot_thread, daemon=True)
-bot_thread.start()
-
 if __name__ == "__main__":
-    import os
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port)
+    # Inicia el WebSocket en un hilo secundario
+    threading.Thread(target=start_bot_thread, daemon=True).start()
+    # Inicia el Servidor HTTP nativo en el hilo principal
+    run_http_server()
