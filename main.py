@@ -1,7 +1,17 @@
 import os
 import time
 import requests
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timezone
+
+# ==========================================
+# SERVIDOR WEB PARA RENDER (EVITA ERROR DE PUERTO)
+# ==========================================
+def run_dummy_server():
+    port = int(os.getenv("PORT", 10000))
+    server = HTTPServer(('0.0.0.0', port), BaseHTTPRequestHandler)
+    server.serve_forever()
 
 # ==========================================
 # CONFIGURACIÓN Y VARIABLES DE ENTORNO
@@ -80,6 +90,9 @@ def evaluate_market(current_price, target_price, current_minute):
 def main():
     global last_sent_action, current_target_price, last_candle_block
     
+    # Iniciar servidor web dummy para Render
+    threading.Thread(target=run_dummy_server, daemon=True).start()
+    
     print("🚀 Bot Kalshi 15m iniciado con éxito.")
     send_discord_alert("🟢 **BOT CONECTADO**\nBot iniciado correctamente y monitoreando mercado.")
 
@@ -92,13 +105,11 @@ def main():
             btc_price = get_btc_price()
 
             if btc_price is not None:
-                # AUTOMATIZACIÓN DEL TARGET PRICE:
-                # Si entramos en un nuevo bloque de 15m (minutos :00, :15, :30, :45),
-                # fijamos el precio actual como el 'Price to beat' para los próximos 15 minutos.
+                # Fijar Target al inicio de cada vela de 15m
                 if candle_block != last_candle_block or current_target_price is None:
                     current_target_price = btc_price
                     last_candle_block = candle_block
-                    last_sent_action = "NEUTRAL"  # Reiniciar estado para el nuevo ciclo
+                    last_sent_action = "NEUTRAL"
                     print(f"🎯 [NUEVO TARGET FIJADO]: ${current_target_price:.2f} para el bloque {candle_block * 15}m")
 
                 current_action, detail = evaluate_market(btc_price, current_target_price, current_minute)
