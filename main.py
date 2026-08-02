@@ -55,29 +55,18 @@ def get_btc_price():
         return None
 
 
-def get_kalshi_exact_target():
-    """Obtiene el 'Price to Beat' (Target) directo de Kalshi buscando los mercados activos."""
-    try:
-        # Consulta la API de mercados activos de Kalshi
-        url = "https://api.elections.kalshi.com/trade-api/v2/markets?series_ticker=KXBTC15M&limit=10"
-        res = requests.get(url, timeout=5).json()
-        
-        markets = res.get("markets", [])
-        for m in markets:
-            if m.get("status") == "active" or m.get("status") == "open":
-                # Kalshi asigna el strike en 'floor_strike', 'cap_strike' o 'strike_price'
-                strike = m.get("floor_strike") or m.get("cap_strike") or m.get("strike_price")
-                if strike is not None:
-                    return float(strike)
-    except Exception as e:
-        print(f"⚠️ Error al consultar Target directo de Kalshi: {e}")
-    return None
+def fetch_exact_target(now, candle_block, is_block_start):
+    """Busca el Target exacto probando Coinbase Spot Ticker y Velas Históricas."""
+    # Si estamos justo al inicio de bloque (:00, :15, :30, :45), la prioridad es el primer ticker
+    if is_block_start:
+        for _ in range(3):
+            price = get_btc_price()
+            if price is not None:
+                return price, "TICKER EN VIVO (:00)"
+            time.sleep(1)
 
-
-def get_coinbase_block_open(candle_block, now):
-    """Busca el Open exacto del minuto 00/15/30/45 del bloque actual en Coinbase."""
+    # Si es a mitad de bloque (reinicio), buscamos la vela del inicio del bloque
     try:
-        # Timestamp de inicio del bloque de 15 minutos actual (ej. 15:15:00 UTC)
         block_start_dt = now.replace(minute=(candle_block * 15), second=0, microsecond=0)
         block_start_ts = int(block_start_dt.timestamp())
 
@@ -85,13 +74,21 @@ def get_coinbase_block_open(candle_block, now):
         c_res = requests.get(candles_url, timeout=5).json()
 
         if isinstance(c_res, list) and len(c_res) > 0:
-            # Buscar la vela con el timestamp exacto de inicio de bloque
+            # Buscar la vela cuya hora de inicio corresponda al inicio de bloque
             target_candle = next((c for c in c_res if c[0] == block_start_ts), None)
             if target_candle:
-                return float(target_candle[3])  # Open price exacto de ese minuto
+                return float(target_candle[3]), "HISTÓRICO DE VELA (:00)"
+            
+            # Si es muy reciente y no ha generado la vela exacta, tomar la más cercana al bloque
+            for candle in c_res:
+                if candle[0] <= block_start_ts:
+                    return float(candle[3]), "VELA HISTÓRICA CERCANA"
     except Exception as e:
-        print(f"⚠️ Error consultando vela histórica Coinbase: {e}")
-    return None
+        print(f"⚠️ Error al consultar velas históricas: {e}")
+
+    # Respaldo final si falla lo demás
+    spot = get_btc_price()
+    return spot, "SPOT RESPALDO"
 
 
 def evaluate_market(current_price, target_price, current_minute):
@@ -135,31 +132,23 @@ def main():
             now = datetime.now(timezone.utc)
             current_minute = now.minute % 15
             candle_block = now.minute // 15
+            is_block_start = (current_minute == 0 and now.second < 20)
 
             btc_price = get_btc_price()
 
             if btc_price is not None:
                 # Fijar Target al inicio de cada vela de 15m o si no hay Target guardado
                 if candle_block != last_candle_block or current_target_price is None:
-                    # Intento 1: API de Kalshi
-                    target_kalshi = get_kalshi_exact_target()
-
-                    if target_kalshi is not None:
-                        current_target_price = target_kalshi
-                        print(f"📌 [TARGET EXACTO KALSHI FIJADO]: ${current_target_price:.2f} para bloque {candle_block * 15}m")
+                    target_val, source_info = fetch_exact_target(now, candle_block, is_block_start)
+                    
+                    if target_val is not None:
+                        current_target_price = target_val
                     else:
-                        # Intento 2: Histórico exacto del minuto :00/:15/:30/:45 en Coinbase
-                        cb_open = get_coinbase_block_open(candle_block, now)
-                        if cb_open is not None:
-                            current_target_price = cb_open
-                            print(f"📌 [TARGET HISTÓRICO COINBASE FIJADO]: ${current_target_price:.2f} para bloque {candle_block * 15}m")
-                        else:
-                            # Intento 3: Precio spot si falla todo lo demás
-                            current_target_price = btc_price
-                            print(f"📌 [TARGET SPOT TEMPORAL FIJADO]: ${current_target_price:.2f} para bloque {candle_block * 15}m")
+                        current_target_price = btc_price
 
                     last_candle_block = candle_block
                     last_sent_action = "NEUTRAL"
+                    print(f"📌 [TARGET FIJADO - {source_info}]: ${current_target_price:.2f} para bloque {candle_block * 15}m")
 
                 # Evaluar mercado
                 action, detail = evaluate_market(btc_price, current_target_price, current_minute)
