@@ -1,5 +1,6 @@
 websockets
 requests
+discord.py
 cryptography
 pandas
 ta
