@@ -1,169 +1,138 @@
-import threading
+import os
 import time
 import requests
-import pandas as pd
 from datetime import datetime
-import os
-from flask import Flask
 
-# Servidor Flask para mantener el Web Service activo en Render
-app = Flask(__name__)
+# ==========================================
+# CONFIGURACIÓN Y VARIABLES DE ENTORNO
+# ==========================================
+DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "TU_WEBHOOK_AQUI")
+DISTANCIA_MAXIMA_TARGET = 15.0  # Máxima distancia en USD permitida para entrar
+POLL_INTERVAL = 10              # Frecuencia de chequeo en segundos (10s)
 
-@app.route('/')
-def health_check():
-    return "OK - Bot Kalshi Activo", 200
+# Estado global del bot
+last_sent_action = "NEUTRAL"
 
-# ------------------------------------------
-# CONFIGURACIÓN DE DISCORD WEBHOOK
-# ------------------------------------------
-DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1533385616140664992/k-Ibnna6ZiHxiP0qhR2Ol-aBwavpOUezSCL4jYcT4HE_non4BHCz7vW0Xsc1_8WMYfqU"
-
-last_sent_action = ""
-
-def send_discord_alert(action, price, reason, timestamp):
-    if not DISCORD_WEBHOOK_URL:
-        print("[DISCORD] ERROR: URL de Webhook no configurada.", flush=True)
+# ==========================================
+# FUNCIONES AUXILIARES
+# ==========================================
+def send_discord_alert(message):
+    """Envía un mensaje o alerta al webhook de Discord."""
+    if not DISCORD_WEBHOOK_URL or DISCORD_WEBHOOK_URL == "TU_WEBHOOK_AQUI":
+        print("[DISCORD] Error: Webhook URL no configurada.")
         return
 
-    # Selección de color según el tipo de acción
-    color = 0x3498DB # Azul por defecto
-    if "COMPRAR UP" in action or "CONECTADO" in action:
-        color = 0x2ECC71 # Verde
-    elif "COMPRAR DOWN" in action:
-        color = 0xE74C3C # Rojo
-    elif "PROFIT" in action or "CERRAR" in action:
-        color = 0xF1C40F # Amarillo
-
-    # Payload para la API de Discord
-    payload = {
-        "username": "Captain Hook",
-        "embeds": [{
-            "title": "🚨 SEÑAL KALSHI BTC 15M",
-            "color": color,
-            "fields": [
-                {"name": "Acción", "value": f"**{action}**", "inline": False},
-                {"name": "Precio BTC", "value": f"${price:,.2f}" if price > 0 else "N/A", "inline": True},
-                {"name": "Hora", "value": timestamp, "inline": True},
-                {"name": "Detalle", "value": reason, "inline": False}
-            ],
-            "footer": {"text": "Bot Kalshi 15m"}
-        }]
-    }
-
+    payload = {"content": message}
     try:
-        res = requests.post(
-            DISCORD_WEBHOOK_URL, 
-            json=payload, 
-            headers={"Content-Type": "application/json"}, 
-            timeout=5
-        )
-        print(f"[DISCORD HTTP STATUS]: {res.status_code}", flush=True)
-        if res.status_code not in [200, 204]:
-            print(f"[DISCORD ERROR RESPUESTA]: {res.text}", flush=True)
+        response = requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=5)
+        print(f"[DISCORD HTTP STATUS]: {response.status_code}")
     except Exception as e:
-        print(f"[ERROR CONEXION DISCORD]: {e}", flush=True)
+        print(f"[DISCORD ERROR]: No se pudo enviar el mensaje: {e}")
 
-def fetch_candles():
-    """ Obtiene velas de 1m vía REST API directa de Coinbase """
+def get_btc_price():
+    """Obtiene el precio actual de BTC desde la API de Coinbase con timeout."""
     try:
-        url = "https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=60"
-        res = requests.get(url, timeout=10)
-        if res.status_code == 200:
-            data = res.json()
-            df = pd.DataFrame(data, columns=['time', 'low', 'high', 'open', 'close', 'volume'])
-            df = df.iloc[::-1].reset_index(drop=True)
-            df['timestamp'] = pd.to_datetime(df['time'], unit='s').dt.strftime('%H:%M:00')
-            return df.tail(30)
+        url = "https://api.coinbase.com/v2/prices/BTC-USD/spot"
+        res = requests.get(url, timeout=5)
+        data = res.json()
+        return float(data["data"]["amount"])
     except Exception as e:
-        print(f"[ERROR FETCH COINBASE]: {e}", flush=True)
-    return None
+        print(f"[PRECIO ERROR]: Error consultando la API: {e}")
+        return None
 
-def evaluate_signals(df_1m):
-    global last_sent_action
-    if df_1m is None or len(df_1m) < 5:
-        return "NEUTRAL ⚖️", "Sin datos suficientes"
+def get_kalshi_target_price():
+    """
+    Sustituye esta función si obtienes el Target directamente de la API de Kalshi.
+    Por defecto devuelve None si no está integrado aún.
+    """
+    return None 
 
-    now = datetime.now()
-    min_in_15 = now.minute % 15
+# ==========================================
+# EVALUACIÓN DE SEÑALES Y REGLAS DE NEGOCIO
+# ==========================================
+def evaluate_market(current_price, target_price, current_minute):
+    """
+    Calcula la acción sugerida basándose en el precio, el objetivo y el tiempo de la vela (15m).
+    """
+    # 1. Filtro de seguridad para minutos finales (Cooldown en minutos 13 y 14)
+    if current_minute >= 13:
+        return "NEUTRAL", "Final de bloque (Cuota baja / Cooldown)"
 
-    # Cálculo de EMAs
-    df_1m['ema9'] = df_1m['close'].ewm(span=9, adjust=False).mean()
-    df_1m['ema21'] = df_1m['close'].ewm(span=21, adjust=False).mean()
+    # 2. Si no hay Target configurado en la API, retornamos estado de espera
+    if target_price is None:
+        return "NEUTRAL", "Esperando confirmación / Target no configurado"
 
-    last = df_1m.iloc[-1]
+    distancia = target_price - current_price
 
-    # Evaluación de mechas para Take Profit inteligente
-    body = abs(last['close'] - last['open'])
-    upper_wick = last['high'] - max(last['close'], last['open'])
-    lower_wick = min(last['close'], last['open']) - last['low']
+    # 3. Filtro de Distancia Mínima al Target
+    if distancia > DISTANCIA_MAXIMA_TARGET and current_minute > 3:
+        return "NEUTRAL", f"Distancia al Target muy alta (${distancia:.2f})"
 
-    # Solo valida la mecha si supera $25 USD de rechazo (evita falsas alarmas por ruido)
-    if "DOWN" in last_sent_action:
-        if lower_wick > (body * 1.5) and lower_wick >= 25.0:
-            return "💰 CERRAR / PROFIT (DOWN)", f"Rechazo alcista fuerte (${lower_wick:.2f}) en min {min_in_15}/15"
-
-    if "UP" in last_sent_action:
-        if upper_wick > (body * 1.5) and upper_wick >= 25.0:
-            return "💰 CERRAR / PROFIT (UP)", f"Rechazo bajista fuerte (${upper_wick:.2f}) en min {min_in_15}/15"
-
-    # Bloqueo en minutos finales de la vela de 15m
-    if min_in_15 >= 13:
-        return "NEUTRAL ⚖️", f"Final de bloque ({min_in_15}/15m) - Cuota baja"
-
-    # Dirección de tendencia
-    is_bull = last['ema9'] > last['ema21'] and last['close'] >= last['open']
-    is_bear = last['ema9'] < last['ema21'] and last['close'] <= last['open']
-
-    if is_bull:
-        if min_in_15 <= 3:
-            return "🔥 COMPRAR UP 🚀", f"Entrada principal (min {min_in_15}/15)"
-        else:
-            return f"⚡ RE-ENTRADA COMPRAR UP 🚀", f"Impulso continuo (min {min_in_15}/15)"
-
-    if is_bear:
-        if min_in_15 <= 3:
-            return "🔥 COMPRAR DOWN 📉", f"Entrada principal (min {min_in_15}/15)"
-        else:
-            return f"⚡ RE-ENTRADA COMPRAR DOWN 📉", f"Impulso continuo (min {min_in_15}/15)"
-
-    return "NEUTRAL ⚖️", f"Esperando volumen ({min_in_15}/15m)"
-
-def bot_loop():
-    global last_sent_action
-    print("🚀 Bot iniciado con éxito.", flush=True)
+    # 4. Condición de Entrada UP
+    if current_price >= (target_price - 5.0):
+        return "COMPRAR UP", f"Impulso continuo (min {current_minute}/15)"
     
-    send_discord_alert(
-        "🟢 BOT CONECTADO", 
-        0, 
-        "Bot iniciado correctamente y monitoreando mercado.", 
-        datetime.now().strftime('%H:%M:%S')
-    )
+    # 5. Condición de Entrada DOWN
+    elif current_price <= (target_price - DISTANCIA_MAXIMA_TARGET):
+        return "COMPRAR DOWN", f"Tendencia bajista (min {current_minute}/15)"
+
+    return "NEUTRAL", "Mercado lateral / Sin volumen suficiente"
+
+# ==========================================
+# BUCLE PRINCIPAL (MAIN LOOP)
+# ==========================================
+def main():
+    global last_sent_action
+    
+    print("🚀 Bot Kalshi 15m iniciado con éxito.")
+    send_discord_alert("🟢 **BOT CONECTADO**\nBot iniciado correctamente y monitoreando mercado.")
 
     while True:
         try:
-            df = fetch_candles()
-            if df is not None:
-                last_candle = df.iloc[-1]
-                close_p = last_candle['close']
-                t_stamp = datetime.now().strftime('%H:%M:00')
-                
-                action, reason = evaluate_signals(df)
-                
-                print(f"[{t_stamp}] BTC: ${close_p:,.2f} | ACCIÓN: {action} ({reason})", flush=True)
+            now = datetime.utcnow()
+            current_minute = now.minute % 15  # Minuto relativo dentro de la vela de 15m
+            
+            btc_price = get_btc_price()
+            target_price = get_kalshi_target_price()
 
-                if "COMPRAR" in action or "CERRAR" in action or "PROFIT" in action:
-                    if action != last_sent_action:
-                        send_discord_alert(action, close_p, reason, t_stamp)
-                        last_sent_action = action
+            if btc_price is not None:
+                current_action, detail = evaluate_market(btc_price, target_price, current_minute)
+
+                # Log en consola de Render
+                print(f"[{now.strftime('%H:%M:%S')}] BTC: ${btc_price:.2f} | ACCIÓN: {current_action} ({detail})")
+
+                # ----------------------------------------------------
+                # LÓGICA DE ALERTAS A DISCORD
+                # ----------------------------------------------------
+                
+                # A) NUEVA ENTRADA O CAMBIO DE TENDENCIA
+                if current_action in ["COMPRAR UP", "COMPRAR DOWN"] and current_action != last_sent_action:
+                    emoji = "🚀" if current_action == "COMPRAR UP" else "📉"
+                    msg = (
+                        f"🚨 **SEÑAL KALSHI BTC 15M** 🚨\n"
+                        f"**Acción:** 🔥 {current_action} {emoji}\n"
+                        f"**Precio BTC:** ${btc_price:.2f}\n"
+                        f"**Hora:** {now.strftime('%H:%M:%S')} UTC\n"
+                        f"**Detalle:** {detail}"
+                    )
+                    send_discord_alert(msg)
+                    last_sent_action = current_action
+
+                # B) ALERTA DE INVALIDACIÓN / CERRAR POSICIÓN
+                elif current_action == "NEUTRAL" and last_sent_action in ["COMPRAR UP", "COMPRAR DOWN"]:
+                    msg = (
+                        f"⚠️ **INVALIDACIÓN / CERRAR POSICIÓN** ⚠️\n"
+                        f"**Precio BTC:** ${btc_price:.2f}\n"
+                        f"**Hora:** {now.strftime('%H:%M:%S')} UTC\n"
+                        f"**Motivo:** El mercado perdió fuerza o cambió de tendencia. Vende o sal del contrato ahora."
+                    )
+                    send_discord_alert(msg)
+                    last_sent_action = "NEUTRAL"
 
         except Exception as e:
-            print(f"[ERROR EN BOT LOOP]: {e}", flush=True)
+            print(f"[CRITICAL ERROR]: Excepción en el bucle principal: {e}")
 
-        time.sleep(30)
+        time.sleep(POLL_INTERVAL)
 
 if __name__ == "__main__":
-    t = threading.Thread(target=bot_loop, daemon=True)
-    t.start()
-
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    main()
