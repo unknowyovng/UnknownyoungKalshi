@@ -66,7 +66,7 @@ def send_discord_notification(title, description, color=0x3498db):
             "title": title,
             "description": description,
             "color": color,
-            "footer": {"text": "Bot de Monitoreo de Mercado & Noticias"}
+            "footer": {"text": "Bot de Monitoreo de Mercado & Noticas / Kalshi"}
         }]
     }
     try:
@@ -126,8 +126,31 @@ def process_market_event(source, author, content):
     send_discord_notification(f"🚨 Señal Detectada - {sentiment}", body, color)
 
 # ==========================================
-# 5. MÓDULO KALSHI & DEPORTES
+# 5. MÓDULO DE PRONÓSTICOS DEPORTIVOS Y KALSHI
 # ==========================================
+def format_sports_signal(sport_emoji, sport_name, home_team, away_team, pick_type, winner_team, odds, confidence):
+    """
+    Formatea las señales deportivas asegurando que se incluya el nombre del equipo o jugador 
+    junto al tipo de pronóstico (e.g., 'Gana Local (R. Nadal)').
+    """
+    if pick_type == "Gana Local":
+        prediction_str = f"Gana Local ({home_team})"
+    elif pick_type == "Gana Visitante":
+        prediction_str = f"Gana Visitante ({away_team})"
+    else:
+        prediction_str = f"{pick_type} ({winner_team})"
+
+    title = f"🎯 SEÑAL - {sport_emoji} {sport_name.upper()}"
+    description = (
+        f"**Deporte:** {sport_emoji} {sport_name}\n"
+        f"**Evento:** {home_team} vs {away_team}\n"
+        f"**Pronóstico:** {prediction_str}\n"
+        f"**Cuota:** {odds}\n"
+        f"**Confianza:** {confidence}%"
+    )
+    
+    send_discord_notification(title, description, color=0x3498db)
+
 def check_kalshi_markets():
     # Lógica de consulta a la API de Kalshi para mercados de eventos y predicciones
     pass
@@ -139,7 +162,7 @@ def start_monitoring():
     print("[MONITOR] Rastreo iniciado para X, Truth Social y Noticias de Wall Street...")
     while True:
         try:
-            # Espacio para polling de feeds RSS de Wall Street, APIs de X / Truth Social
+            # Espacio para polling de feeds RSS de Wall Street, APIs de X / Truth Social y Kalshi
             check_kalshi_markets()
             time.sleep(15)
         except Exception as e:
@@ -160,6 +183,7 @@ if __name__ == "__main__":
         "- **10+ Personas Influyentes** (Musk, Trump, Powell, Saylor, etc.)\n"
         "- **10+ Empresas Clave** (MicroStrategy, Tesla, BlackRock, Nvidia, etc.)\n"
         "- **Plataformas:** X, Truth Social y Noticias de Wall Street\n"
+        "- **Alertas Deportivas Clarificadas** (Nombre explícito del equipo/jugador)\n"
         "- **Control de Volatilidad:** 15 Minutos",
         color=0x3498db
     )
