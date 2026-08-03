@@ -16,7 +16,6 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"OK - Bot is running")
 
     def log_message(self, format, *args):
-        # Suppress standard HTTP logging to keep console clean
         return
 
 def run_http_server():
@@ -25,15 +24,24 @@ def run_http_server():
     print(f"[SERVER] Web server started on port {port}")
     server.serve_forever()
 
-# Start HTTP server in a background thread
 server_thread = threading.Thread(target=run_http_server, daemon=True)
 server_thread.start()
 
 
 # ==========================================
-# 2. DISCORD NOTIFICATION HELPER
+# 2. CONFIGURACIÓN Y CREDENCIALES
 # ==========================================
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "")
+KALSHI_API_KEY = os.environ.get("KALSHI_API_KEY", "")  # Agrega tu API Key en Render (Environment)
+
+def get_kalshi_headers():
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json"
+    }
+    if KALSHI_API_KEY:
+        headers["Authorization"] = f"Bearer {KALSHI_API_KEY}"
+    return headers
 
 def send_discord_alert(payload):
     if not DISCORD_WEBHOOK_URL:
@@ -65,7 +73,10 @@ def check_btc_15m_markets():
             "status": "open"
         }
         
-        response = requests.get(url, params=params, timeout=10)
+        # Se agregan los headers con autenticación
+        headers = get_kalshi_headers()
+        
+        response = requests.get(url, headers=headers, params=params, timeout=10)
         if response.status_code != 200:
             print(f"[BTC 15M] Error querying Kalshi API: {response.status_code}")
             return
@@ -119,12 +130,8 @@ def check_btc_15m_markets():
 # 4. SPORTS MARKET SCANNER
 # ==========================================
 def scan_sports_markets():
-    """
-    Scans live sports events on Kalshi for probability anomalies/mispricings.
-    """
     try:
         print("[SPORTS] Scanning live sports markets...")
-        # Sports market retrieval and filtering logic
         pass
     except Exception as e:
         print(f"[SPORTS] Error during execution: {e}")
@@ -136,15 +143,12 @@ def scan_sports_markets():
 if __name__ == "__main__":
     print("[BOT] Starting automated trading monitor...")
     
-    # Counter to manage different scan frequencies
     cycle_counter = 0
 
     while True:
         try:
-            # 1. Scan sports markets every loop (~60s)
             scan_sports_markets()
 
-            # 2. Check BTC 15M predictions every 3 cycles (~3 minutes)
             if cycle_counter % 3 == 0:
                 check_btc_15m_markets()
 
