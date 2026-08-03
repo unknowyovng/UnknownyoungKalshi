@@ -120,25 +120,24 @@ def analyze_sports_recommendation(title, last_price):
 
     return rec_type, pick
 
-def is_within_max_days(date_string, max_days=2):
+def is_within_max_hours(date_string, max_hours=48):
     """
-    Filtro de tiempo estricto:
-    Solo acepta eventos que estén ocurriendo HOY, MAÑANA o máximo dentro de 2 DÍAS (48 horas).
-    Descarta torneos a largo plazo (2026, 2030, etc.).
+    Filtro temporal ultra estricto para evitar eventos lejanos (2027, 2030, etc.).
+    Valida que la fecha de expiración/cierre esté estrictamente dentro de las próximas 48 horas.
     """
     if not date_string:
-        return True
+        return False  # Si no tiene fecha explícita, se descarta por seguridad para evitar basura a largo plazo
     try:
         clean_date = date_string.replace("Z", "+00:00")
         event_date = datetime.fromisoformat(clean_date)
         
         now = datetime.now(timezone.utc)
-        max_limit = now + timedelta(days=max_days)
+        max_limit = now + timedelta(hours=max_hours)
         
-        # Permitir margen de eventos en curso (hasta 6h atrás) y máximo 2 días hacia adelante
-        return (now - timedelta(hours=6)) <= event_date <= max_limit
+        # Permitir eventos en curso recientes (hasta 2h atrás por retrasos de API) y máximo el límite de horas
+        return (now - timedelta(hours=2)) <= event_date <= max_limit
     except Exception:
-        return True
+        return False
 
 # ---------------------------------------------------------
 # 4. MONITOREO DE MERCADOS PÚBLICOS KALSHI
@@ -147,12 +146,12 @@ KALSHI_API_URL = "https://api.elections.kalshi.com/v1/events"
 
 def scan_kalshi_markets():
     """
-    Escanea mercados de Kalshi buscando eventos de Bitcoin y anomalías en Deportes (máx. 2 días).
+    Escanea mercados de Kalshi buscando eventos de Bitcoin y anomalías en Deportes (máx. 48 horas).
     """
     try:
         response = requests.get(
             KALSHI_API_URL,
-            params={"limit": 50, "status": "open"},
+            params={"limit": 100, "status": "open"},
             headers={"Accept": "application/json"},
             timeout=10
         )
@@ -175,10 +174,11 @@ def scan_kalshi_markets():
             market = markets[0]
             last_price = market.get("last_price", 0)
 
-            # --- FILTRO TEMPORAL ESTRICTO (HOY, MAÑANA Y MÁXIMO 2 DÍAS) ---
+            # --- FILTRO TEMPORAL ESTRICTO (MÁXIMO 48 HORAS) ---
             expiration_time = market.get("expiration_time") or market.get("close_time") or event.get("mutually_exclusive_expiration_date")
-            if expiration_time and not is_within_max_days(expiration_time, max_days=2):
-                print(f"⏭️ Ignorando evento a largo plazo (>2 días): {title}")
+            
+            if not is_within_max_hours(expiration_time, max_hours=48):
+                # Descarta silenciosamente cualquier evento fuera del rango de 48 horas (ej. 2027, 2030)
                 continue
 
             # --- ESTRUCTURA DE URL CORREGIDA ---
