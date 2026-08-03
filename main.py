@@ -6,10 +6,19 @@ import sqlite3
 import threading
 from collections import deque
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from datetime import datetime
+from zoneinfo import ZoneInfo  # Manejo exacto de zona horaria local
 import aiohttp
 import websockets
 import discord
 from discord.ext import commands
+
+# Configuración de Zona Horaria (Hora del Este / Florida EDT-EST)
+ZONA_HORARIA_LOCAL = ZoneInfo("America/New_York")
+
+def obtener_hora_local():
+    """Retorna un objeto datetime con la hora exacta de la zona Este"""
+    return datetime.now(ZONA_HORARIA_LOCAL)
 
 # ==========================================
 # 1. SERVIDOR WEB FALSO (Render 24/7)
@@ -31,87 +40,133 @@ def run_dummy_server():
 threading.Thread(target=run_dummy_server, daemon=True).start()
 
 # ==========================================
-# 2. BASE DE DATOS LOCAL
+# 2. BASE DE DATOS LOCAL CON SOPORTE OHLC (VELAS)
 # ==========================================
 DB_FILE = "btc_memory.db"
 
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
+    # Guardar picos (high), bajos (low), apertura (open) y cierre (close) por bloque horario
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS btc_hourly_candles (
+            hour_timestamp INTEGER PRIMARY KEY,
+            open_price REAL,
+            high_price REAL,
+            low_price REAL,
+            close_price REAL
+        )
+    """)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS btc_prices (
             timestamp INTEGER PRIMARY KEY,
-            price REAL,
-            high REAL,
-            low REAL
+            price REAL
         )
     """)
     conn.commit()
     conn.close()
 
-def guardar_precio_db(timestamp, price):
+def actualizar_vela_hora_db(hour_ts, open_p, high_p, low_p, close_p):
+    """Guarda o actualiza la vela horaria con su verdadero High y Low"""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT OR REPLACE INTO btc_prices (timestamp, price, high, low)
-        VALUES (?, ?, ?, ?)
-    """, (timestamp, price, price, price))
+        INSERT INTO btc_hourly_candles (hour_timestamp, open_price, high_price, low_price, close_price)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(hour_timestamp) DO UPDATE SET
+            high_price = MAX(high_price, excluded.high_price),
+            low_price = MIN(low_price, excluded.low_price),
+            close_price = excluded.close_price
+    """, (hour_ts, open_p, high_p, low_p, close_p))
     
+    # Mantener máximo 30 días de historial
     hace_30_dias = int(time.time()) - 2592000
-    cursor.execute("DELETE FROM btc_prices WHERE timestamp < ?", (hace_30_dias,))
+    cursor.execute("DELETE FROM btc_hourly_candles WHERE hour_timestamp < ?", (hace_30_dias,))
     conn.commit()
     conn.close()
 
-def obtener_estadisticas_mes():
+def obtener_promedio_rango_horario():
+    """Calcula el rango promedio (High - Low) de las últimas velas procesadas"""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    hace_30_dias = int(time.time()) - 2592000
     cursor.execute("""
-        SELECT MIN(price), MAX(price), AVG(price), COUNT(*)
-        FROM btc_prices WHERE timestamp >= ?
-    """, (hace_30_dias,))
+        SELECT AVG(high_price - low_price)
+        FROM (
+            SELECT high_price, low_price 
+            FROM btc_hourly_candles 
+            ORDER BY hour_timestamp DESC 
+            LIMIT 24
+        )
+    """)
     row = cursor.fetchone()
     conn.close()
-    if row and row[3] > 0:
-        return {"min": row[0], "max": row[1], "avg": row[2], "registros": row[3]}
-    return None
+    if row and row[0] is not None and row[0] > 0:
+        return row[0]
+    return 150.0  # Rango por defecto ($150 USD) si hay pocos datos
 
 init_db()
 
 # ==========================================
-# 3. CONFIGURACIÓN DE DISCORD Y VARIABLES
+# 3. CONFIGURACIÓN DE DISCORD Y VARIABLES EN VIVO
 # ==========================================
 intents = discord.Intents.default()
 intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-manual_target = None
-modo_manual = False
-target_kalshi_auto = None
 precio_actual_global = 0.0
+
+# Tracking de Vela Horaria Actual
+vela_actual = {
+    "hour_timestamp": None,
+    "open": 0.0,
+    "high": 0.0,
+    "low": 0.0,
+    "close": 0.0
+}
 
 historial_corto = deque(maxlen=60)
 UMBRAL_BALLENA_BTC = 5.0
-INVERSION_FIX_USD = 10.0  # Inversión exacta de $10 USD
+
+def actualizar_tracking_vela(price):
+    """Registra en tiempo real los picos (high) y bajos (low) de la vela actual"""
+    global vela_actual
+    now_ts = int(time.time())
+    hour_ts = (now_ts // 3600) * 3600
+    
+    if vela_actual["hour_timestamp"] != hour_ts:
+        # Nueva hora iniciada
+        vela_actual["hour_timestamp"] = hour_ts
+        vela_actual["open"] = price
+        vela_actual["high"] = price
+        vela_actual["low"] = price
+        vela_actual["close"] = price
+    else:
+        # Actualización de la hora en curso
+        if price > vela_actual["high"]:
+            vela_actual["high"] = price
+        if price < vela_actual["low"]:
+            vela_actual["low"] = price
+        vela_actual["close"] = price
+        
+    actualizar_vela_hora_db(hour_ts, vela_actual["open"], vela_actual["high"], vela_actual["low"], vela_actual["close"])
 
 # ==========================================
-# 4. LÓGICA DE ESTIMACIÓN KALSHI (STRIKES 100 IN 100)
+# 4. LÓGICA KALSHI BASADA EN VOLATILIDAD Y OHLC
 # ==========================================
 def calcular_prediccion_kalshi(precio_actual):
-    """Calcula el target exacto de cierre (Arriba de X o Abajo de Y)"""
+    """Calcula el target considerando la Apertura, Máximo, Mínimo y Rango Promedio"""
     base_100 = round(precio_actual / 100) * 100
+    rango_promedio = obtener_promedio_rango_horario()
     
-    # Calcular tendencia reciente (último minuto)
-    if len(historial_corto) >= 10:
-        momentum = precio_actual - historial_corto[0]
-    else:
-        momentum = 0.0
+    open_p = vela_actual["open"] if vela_actual["open"] > 0 else precio_actual
+    high_p = vela_actual["high"] if vela_actual["high"] > 0 else precio_actual
+    low_p = vela_actual["low"] if vela_actual["low"] > 0 else precio_actual
+    
+    momentum_vela = precio_actual - open_p
 
-    # Estimación de sesgo alcista o bajista
-    if momentum >= 0:
+    if momentum_vela >= 0:
         direccion = "ARRIBA (UP / YES)"
-        # Niveles superiores para Kalshi ($63,500 / $63,600 / $63,700, etc.)
         strike_principal = base_100 if base_100 > precio_actual else base_100 + 100
         strike_seguro = strike_principal - 100
         strike_agresivo = strike_principal + 100
@@ -121,11 +176,13 @@ def calcular_prediccion_kalshi(precio_actual):
             "target_principal": f"BTC estará **POR ENCIMA DE ${strike_principal:,.0f}**",
             "strike_seguro": f"Arriba de ${strike_seguro:,.0f} (Costo ~$0.68) ➔ Ganancia: +$4.70 USD con $10",
             "strike_balanceado": f"Arriba de ${strike_principal:,.0f} (Costo ~$0.45) ➔ Ganancia: +$12.20 USD con $10",
-            "strike_agresivo": f"Arriba de ${strike_agresivo:,.0f} (Costo ~$0.25) ➔ Ganancia: +$30.00 USD con $10"
+            "strike_agresivo": f"Arriba de ${strike_agresivo:,.0f} (Costo ~$0.25) ➔ Ganancia: +$30.00 USD con $10",
+            "pico_alto": high_p,
+            "pico_bajo": low_p,
+            "rango_promedio": rango_promedio
         }
     else:
         direccion = "ABAJO (DOWN / NO)"
-        # Niveles inferiores para Kalshi ($64,000 / $63,900 / $63,800, etc.)
         strike_principal = base_100 if base_100 < precio_actual else base_100 - 100
         strike_seguro = strike_principal + 100
         strike_agresivo = strike_principal - 100
@@ -135,13 +192,16 @@ def calcular_prediccion_kalshi(precio_actual):
             "target_principal": f"BTC estará **POR DEBAJO DE ${strike_seguro:,.0f}**",
             "strike_seguro": f"Abajo de ${strike_seguro:,.0f} (Costo ~$0.68) ➔ Ganancia: +$4.70 USD con $10",
             "strike_balanceado": f"Abajo de ${strike_principal:,.0f} (Costo ~$0.45) ➔ Ganancia: +$12.20 USD con $10",
-            "strike_agresivo": f"Abajo de ${strike_agresivo:,.0f} (Costo ~$0.25) ➔ Ganancia: +$30.00 USD con $10"
+            "strike_agresivo": f"Abajo de ${strike_agresivo:,.0f} (Costo ~$0.25) ➔ Ganancia: +$30.00 USD con $10",
+            "pico_alto": high_p,
+            "pico_bajo": low_p,
+            "rango_promedio": rango_promedio
         }
         
     return recomendaciones
 
 # ==========================================
-# 5. WEBSOCKET DE DETECCIÓN DE BALLENAS
+# 5. WEBSOCKET DE DETECCIÓN DE BALLENAS Y PRECIO EN VIVO
 # ==========================================
 async def rastreador_ballenas():
     await bot.wait_until_ready()
@@ -158,7 +218,7 @@ async def rastreador_ballenas():
         try:
             async with websockets.connect(url) as ws:
                 await ws.send(json.dumps(suscribir_msg))
-                print("🐋 Rastreando movimientos de ballenas en tiempo real...")
+                print("🐋 Rastreando movimientos de ballenas y picos/bajos en tiempo real...")
                 
                 async for mensaje in ws:
                     data = json.loads(mensaje)
@@ -169,6 +229,7 @@ async def rastreador_ballenas():
                         
                         precio_actual_global = price
                         historial_corto.append(price)
+                        actualizar_tracking_vela(price)  # Mantiene registrado High/Low de la vela
 
                         if size >= UMBRAL_BALLENA_BTC:
                             canal = discord.utils.get(bot.get_all_channels(), name="alertas-kalshi")
@@ -192,27 +253,33 @@ async def rastreador_ballenas():
             await asyncio.sleep(5)
 
 # ==========================================
-# 6. COMANDOS DISCORD (PROYECCIÓN A LAS :00)
+# 6. COMANDOS DISCORD DE MONITOREO Y PROYECCIÓN
 # ==========================================
 @bot.command(name="proyeccion", aliases=["hora", "cierre", "target"])
 async def estimar_cierre_hora(ctx):
-    """Muestra el Strike recomendado para el cierre de la hora actual con $10 USD"""
+    """Muestra la proyección con datos de Máximos y Mínimos de la vela en curso"""
     precio = precio_actual_global if precio_actual_global > 0 else 63000.0
     
-    minuto_actual = time.strftime("%M")
-    minutos_restantes = 60 - int(minuto_actual)
-    proxima_hora = (int(time.strftime("%I")) % 12) + 1
-    ampm = time.strftime("%p")
+    ahora_local = obtener_hora_local()
+    minuto_actual = ahora_local.minute
+    minutos_restantes = 60 - minuto_actual
+    
+    timestamp_proxima = ahora_local.timestamp() + (minutos_restantes * 60)
+    proxima_hora_dt = datetime.fromtimestamp(timestamp_proxima, tz=ZONA_HORARIA_LOCAL)
+    texto_proxima_hora = proxima_hora_dt.strftime("%I:00 %p").lstrip('0')
     
     recs = calcular_prediccion_kalshi(precio)
     
     embed = discord.Embed(
-        title=f"⏳ PREPARACIÓN CIERRE DE VELA ({proxima_hora}:00 {ampm})",
-        description=f"Faltan **{minutos_restantes} minutos** para el cierre a las **{proxima_hora}:00 {ampm}**.\nInversión: **$10 USD**",
+        title=f"⏳ PREPARACIÓN CIERRE DE VELA ({texto_proxima_hora})",
+        description=f"Faltan **{minutos_restantes} minutos** para el cierre a las **{texto_proxima_hora}**.\nInversión: **$10 USD**",
         color=discord.Color.gold()
     )
     
     embed.add_field(name="Precio BTC Actual", value=f"**${precio:,.2f}**", inline=True)
+    embed.add_field(name="📊 Pico Máximo de la Hora", value=f"${recs['pico_alto']:,.2f}", inline=True)
+    embed.add_field(name="📊 Punto Mínimo de la Hora", value=f"${recs['pico_bajo']:,.2f}", inline=True)
+    
     embed.add_field(name="Predicción Principal Kalshi", value=f"🎯 {recs['target_principal']}", inline=False)
     
     embed.add_field(name="🟢 Opción Segura (Bajo Riesgo)", value=recs["strike_seguro"], inline=False)
@@ -228,7 +295,7 @@ async def estimar_rangos(ctx):
     
     embed = discord.Embed(
         title="🎯 STRIKES DISPONIBLES EN KALSHI",
-        description=f"Precio BTC Actual: **${precio:,.2f}**",
+        description=f"Precio BTC Actual: **${precio:,.2f}**\n*Rango Medio Reciente: ±${obtener_promedio_rango_horario():,.0f} USD*",
         color=discord.Color.purple()
     )
     
@@ -242,14 +309,21 @@ async def estimar_rangos(ctx):
 
 @bot.command(name="memoria", aliases=["stats"])
 async def ver_memoria(ctx):
-    stats = obtener_estadisticas_mes()
-    if not stats:
-        await ctx.send("🧠 Recopilando datos...")
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT MIN(low_price), MAX(high_price), AVG(close_price), COUNT(*) FROM btc_hourly_candles")
+    row = cursor.fetchone()
+    conn.close()
+    
+    if not row or row[3] == 0:
+        await ctx.send("🧠 Recopilando historial de velas horarias...")
         return
-    embed = discord.Embed(title="🧠 MEMORIA DE PRECIOS BTC (30 DÍAS)", color=discord.Color.blue())
-    embed.add_field(name="Mínimo", value=f"${stats['min']:,.2f}", inline=True)
-    embed.add_field(name="Máximo", value=f"${stats['max']:,.2f}", inline=True)
-    embed.add_field(name="Promedio", value=f"${stats['avg']:,.2f}", inline=False)
+        
+    embed = discord.Embed(title="🧠 MEMORIA DE VELAS HORARIAS (OHLC)", color=discord.Color.blue())
+    embed.add_field(name="Mínimo Registrado", value=f"${row[0]:,.2f}", inline=True)
+    embed.add_field(name="Máximo Registrado", value=f"${row[1]:,.2f}", inline=True)
+    embed.add_field(name="Promedio Cierres", value=f"${row[2]:,.2f}", inline=False)
+    embed.add_field(name="Velas de 1H Guardadas", value=f"{row[3]} horas", inline=True)
     await ctx.send(embed=embed)
 
 @bot.event
@@ -276,22 +350,25 @@ async def ciclo_monitoreo():
                     tiempo_actual = time.time()
                     timestamp_int = int(tiempo_actual)
 
-                    guardar_precio_db(timestamp_int, precio_btc)
                     bloque_actual_1h = (timestamp_int + 2) // 3600
 
                     # ----------------------------------------------------
-                    # ALERTA AUTOMÁTICA AL CAMBIAR LA HORA (10:00, 11:00, 12:00)
+                    # ALERTA AUTOMÁTICA AL CAMBIAR LA HORA (:00 EXACTO)
                     # ----------------------------------------------------
                     if ultimo_bloque_1h != bloque_actual_1h:
                         ultimo_bloque_1h = bloque_actual_1h
-                        proxima_hora = (int(time.strftime("%I")) % 12) + 1
-                        ampm = time.strftime("%p")
+                        
+                        ahora_local = obtener_hora_local()
+                        minutos_restantes = 60 - ahora_local.minute
+                        timestamp_proxima = ahora_local.timestamp() + (minutos_restantes * 60)
+                        proxima_hora_dt = datetime.fromtimestamp(timestamp_proxima, tz=ZONA_HORARIA_LOCAL)
+                        texto_proxima_hora = proxima_hora_dt.strftime("%I:00 %p").lstrip('0')
 
                         recs = calcular_prediccion_kalshi(precio_btc)
 
                         embed = discord.Embed(
-                            title=f"🚨 RECOMENDACIÓN DE ENTRADA KALSHI ($10 USD) - CIERRE {proxima_hora}:00 {ampm}",
-                            description=f"Precio Apertura de la Hora: **${precio_btc:,.2f}**\nOperación recomendada para cerrar a las **{proxima_hora}:00 {ampm}**",
+                            title=f"🚨 RECOMENDACIÓN DE ENTRADA KALSHI ($10 USD) - CIERRE {texto_proxima_hora}",
+                            description=f"Precio Apertura de la Hora: **${precio_btc:,.2f}**\nOperación recomendada para cerrar a las **{texto_proxima_hora}**",
                             color=discord.Color.teal()
                         )
                         
