@@ -2,11 +2,10 @@ import os
 import time
 import threading
 import requests
-import urllib.parse
 from flask import Flask
 
 # ---------------------------------------------------------
-# 1. SERVIDOR HTTP PARA RENDER (HEALTH CHECK - MANTENIDO)
+# 1. SERVIDOR HTTP PARA RENDER (HEALTH CHECK)
 # ---------------------------------------------------------
 app = Flask(__name__)
 
@@ -78,7 +77,6 @@ def analyze_sports_recommendation(title, last_price):
     Analiza la especificación de la apuesta y genera recomendación detallada.
     """
     title_lower = title.lower()
-    rec_type = "GENERAL"
     
     # 1. Béisbol (Carreras / Runs)
     if "runs" in title_lower or "carreras" in title_lower or "mlb" in title_lower:
@@ -110,7 +108,7 @@ def analyze_sports_recommendation(title, last_price):
         else:
             pick = "Entrada en Sets a Favor del Underdog"
 
-    # 4. Ganador directo / Underdog (Desventaja inicial 90-10)
+    # 4. Ganador directo / Underdog
     else:
         rec_type = "GANADOR DIRECTO / ANOMALÍA"
         if last_price <= 15:
@@ -121,13 +119,13 @@ def analyze_sports_recommendation(title, last_price):
     return rec_type, pick
 
 # ---------------------------------------------------------
-# 4. MONITOREO DE MERCADOS PÚBLICOS KALSHI (BTC Y DEPORTES)
+# 4. MONITOREO DE MERCADOS PÚBLICOS KALSHI
 # ---------------------------------------------------------
 KALSHI_API_URL = "https://api.elections.kalshi.com/v1/events"
 
 def scan_kalshi_markets():
     """
-    Escanea mercados de Kalshi buscando eventos de Bitcoin (15m/1h) y anomalías en Deportes.
+    Escanea mercados de Kalshi buscando eventos de Bitcoin y anomalías en Deportes.
     """
     try:
         response = requests.get(
@@ -145,6 +143,7 @@ def scan_kalshi_markets():
         for event in events:
             category = event.get("category", "").upper()
             title = event.get("title", "")
+            event_ticker = event.get("event_ticker", "")
             markets = event.get("markets", [])
             
             if not markets:
@@ -152,10 +151,11 @@ def scan_kalshi_markets():
 
             market = markets[0]
             last_price = market.get("last_price", 0)
-            
-            # Corrección de URL de Kalshi usando búsqueda por query para evitar 404
-            encoded_title = urllib.parse.quote(title)
-            kalshi_link = f"https://kalshi.com/markets?query={encoded_title}"
+            ticker = market.get("ticker", event_ticker)
+
+            # ESTRUCTURA DE URL CORREGIDA: Usa el ticker del evento/mercado en minúsculas
+            ticker_slug = ticker.lower() if ticker else event_ticker.lower()
+            kalshi_link = f"https://kalshi.com/markets/{ticker_slug}"
 
             # --- Evaluación Bitcoin 15m y 1h ---
             if "BITCOIN" in title.upper() or "BTC" in title.upper():
@@ -172,9 +172,8 @@ def scan_kalshi_markets():
                 )
                 send_discord_alert(f"Predicción Bitcoin {timeframe}", details, alert_type=alert_tag)
 
-            # --- Detector de Anomalías y Cuotas de Valor en Deportes ---
+            # --- Detector de Anomalías en Deportes ---
             elif "SPORT" in category or "GAME" in category or "MATCH" in category or "SERIES" in category:
-                # Detecta anomalías: equipos muy poco favoritos (<= 20%) o hiper-favoritos (>= 80%)
                 if last_price <= 20 or last_price >= 80:
                     dec_odds, amer_odds = calculate_odds(last_price)
                     rec_category, pick_recommendation = analyze_sports_recommendation(title, last_price)
@@ -195,7 +194,7 @@ def scan_kalshi_markets():
         print(f"Error en escáner de Kalshi: {e}")
 
 # ---------------------------------------------------------
-# 5. MONITOR DE NOTICIAS DE PERSONAS Y EMPRESAS INFLUYENTES
+# 5. MONITOR DE NOTICIAS DE IMPACTO DE MERCADO
 # ---------------------------------------------------------
 TOP_10_PEOPLE = [
     "Elon Musk", "Jerome Powell", "Donald Trump", "Kamala Harris", 
@@ -233,14 +232,11 @@ def main_loop():
         except Exception as e:
             print(f"Error no controlado en el bucle principal: {e}")
             
-        # Esperar 15 minutos (900 segundos) entre escaneos
         time.sleep(900)
 
 if __name__ == "__main__":
-    # Iniciar el servidor HTTP en un hilo independiente para Render (Web Service)
     server_thread = threading.Thread(target=run_http_server, daemon=True)
     server_thread.start()
     print("🌐 Servidor HTTP iniciado para el Health Check de Render.")
 
-    # Ejecutar el bucle del bot en el hilo principal
     main_loop()
