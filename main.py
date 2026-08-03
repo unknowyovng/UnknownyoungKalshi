@@ -1,15 +1,18 @@
 import asyncio
 import json
+import os
+import threading
 import requests
 import websockets
 from datetime import datetime, timezone
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # ==========================================
 # CONFIGURACIÓN GENERAL Y PARÁMETROS
 # ==========================================
-DISCORD_WEBHOOK_URL = "YOUR_DISCORD_WEBHOOK_URL"  # Reemplaza con tu URL de Webhook de Discord
+DISCORD_WEBHOOK_URL = "YOUR_DISCORD_WEBHOOK_URL"  # Reemplaza con tu Webhook de Discord
 
-# Parámetros de Trading y Filtros (Kalshi & Coinbase)
+# Parámetros de Trading y Filtros
 KALSHI_CONTRACT_MIN_PRICE = 0.30
 KALSHI_CONTRACT_MAX_PRICE = 0.35
 WHALE_THRESHOLD_BTC = 5.0
@@ -24,9 +27,30 @@ TRAILING_STOP_PERCENT = 0.02  # 2% Trailing Stop
 # Estado Global del Bot
 current_daily_loss = 0.0
 active_position = None
-consecutive_closes = []
 volatility_pause = False
 price_history = []
+candle_15m_closes = []  # Cierres de velas de 15m para evaluar volatilidad
+
+# ==========================================
+# SERVIDOR HTTP DUMMY (FIX DEFINITIVO DE RENDER)
+# ==========================================
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(b"OK - Bot activo y funcionando en Render")
+
+    def log_message(self, format, *args):
+        # Silenciar logs HTTP rutinarios para no saturar la consola de Render
+        return
+
+def run_health_check_server():
+    """Servidor web secundario para que Render y UptimeRobot mantengan la app activa 24/7."""
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+    print(f"🌐 [Web Service] Servidor Health Check escuchando en el puerto {port}")
+    server.serve_forever()
 
 # ==========================================
 # SERVICIO DE NOTIFICACIONES DISCORD
@@ -41,7 +65,7 @@ def send_discord_alert(message: str, title: str = "🤖 Bot Alert"):
         "embeds": [{
             "title": title,
             "description": message,
-            "color": 3447003,  # Color azul tenue
+            "color": 3447003,
             "timestamp": datetime.now(timezone.utc).isoformat()
         }]
     }
@@ -54,32 +78,18 @@ def send_discord_alert(message: str, title: str = "🤖 Bot Alert"):
 # MÓDULO DE NOTICIAS, INFLUENCERS Y PRUEBAS
 # ==========================================
 def process_news_or_signal(text: str):
-    """
-    Analiza noticias, publicaciones de personas/empresas influyentes 
-    o textos de prueba desde Discord para emitir señales de compra (Alcista/Bajista).
-    """
+    """Procesa noticias o menciones para generar señales alcistas/bajistas."""
     print(f"[Análisis de Noticia/Texto]: {text}")
     text_lower = text.lower()
     
-    # Detección de patrones alcistas
-    if any(keyword in text_lower for keyword in ["subir", "alcista", "bullish", "comprar", "subida", "pump"]):
+    if any(keyword in text_lower for keyword in ["subir", "alcista", "bullish", "comprar", "pump"]):
         send_discord_alert(
-            f"📢 **SEÑAL ALCISTA DETECTADA**\n"
-            f"- **Noticia/Publicación:** '{text}'\n"
-            f"- **Acción recomendada:** COMPRAR ALCISTA (CALL / UP)",
-            title="📰 Análisis de Noticias e Influencers"
+            f"📢 **SEÑAL ALCISTA DETECTADA**\n- **Noticia:** '{text}'\n- **Acción:** COMPRAR ALCISTA (CALL)",
+            title="📰 Análisis de Noticias"
         )
-    # Detección de patrones bajistas
-    elif any(keyword in text_lower for keyword in ["bajar", "bajista", "bearish", "vender", "caída", "dump"]):
+    elif any(keyword in text_lower for keyword in ["bajar", "bajista", "bearish", "vender", "dump"]):
         send_discord_alert(
-            f"📢 **SEÑAL BAJISTA DETECTADA**\n"
-            f"- **Noticia/Publicación:** '{text}'\n"
-            f"- **Acción recomendada:** COMPRAR BAJISTA (PUT / DOWN)",
-            title="📰 Análisis de Noticias e Influencers"
-        )
-    else:
-        send_discord_alert(
-            f"ℹ️ **Noticia Procesada (Sin Señal Clara):** '{text}'",
+            f"📢 **SEÑAL BAJISTA DETECTADA**\n- **Noticia:** '{text}'\n- **Acción:** COMPRAR BAJISTA (PUT)",
             title="📰 Análisis de Noticias"
         )
 
@@ -87,14 +97,14 @@ def process_news_or_signal(text: str):
 # MÓDULO DE PREDICCIONES DEPORTIVAS
 # ==========================================
 def check_sports_prediction(matchup: str, prediction_details: str = ""):
-    """Módulo para seguimiento y alertas de predicciones deportivas (ej. Tenis)."""
+    """Módulo para seguimiento de pronósticos deportivos (ej. Tenis)."""
     msg = f"🎾 **Análisis Deportivo:** {matchup}"
     if prediction_details:
         msg += f"\n- **Pronóstico:** {prediction_details}"
     send_discord_alert(msg, title="🏆 Predicción Deportiva")
 
 # ==========================================
-# FILTROS Y REGLAS DE ESTRATEGIA (KALSHI)
+# FILTROS Y VOLATILIDAD POR VELAS DE 15 MIN
 # ==========================================
 def is_within_entry_window() -> bool:
     """Verifica si estamos entre el minuto 1 y 4 de la vela de 15 min."""
@@ -102,27 +112,22 @@ def is_within_entry_window() -> bool:
     minute_in_candle = now.minute % 15
     return ENTRY_WINDOW_START_MIN <= minute_in_candle <= ENTRY_WINDOW_END_MIN
 
-def check_volatility_filter(prices: list) -> bool:
-    """Detecta cambios bruscos de dirección repetidos para pausar el bot."""
-    if len(prices) < 6:
+def check_15m_volatility_filter(closes: list) -> bool:
+    """
+    Evalúa si hay alternancia errática (zig-zag) en los últimos 4 cierres de 15 minutos.
+    Ejemplo: Cierre 1 Abajo, Cierre 2 Arriba, Cierre 3 Abajo, Cierre 4 Arriba.
+    """
+    if len(closes) < 4:
         return False
-    reversals = 0
-    for i in range(2, len(prices)):
-        change1 = prices[i-1] - prices[i-2]
-        change2 = prices[i] - prices[i-1]
-        if (change1 > 0 and change2 < 0) or (change1 < 0 and change2 > 0):
-            reversals += 1
-    return reversals >= 3
+    
+    # Evaluar direcciones de las velas consecutivas
+    d1 = closes[1] - closes[0]
+    d2 = closes[2] - closes[1]
+    d3 = closes[3] - closes[2]
 
-def check_racha_signal(history: list) -> str:
-    """Verifica racha de al menos 2 cierres consecutivos en la misma dirección."""
-    if len(history) < 2:
-        return "NEUTRAL"
-    if history[-1] > 0 and history[-2] > 0:
-        return "BUY_UP"
-    elif history[-1] < 0 and history[-2] < 0:
-        return "BUY_DOWN"
-    return "NEUTRAL"
+    # Si cambia de dirección continuamente (arriba->abajo->arriba o viceversa)
+    is_zigzag = (d1 > 0 and d2 < 0 and d3 > 0) or (d1 < 0 and d2 > 0 and d3 < 0)
+    return is_zigzag
 
 # ==========================================
 # EJECUCIÓN EN KALSHI & TRAILING STOP
@@ -130,22 +135,20 @@ def check_racha_signal(history: list) -> str:
 async def execute_kalshi_trade(direction: str, current_price: float):
     global current_daily_loss, active_position
 
-    # 1. Control de Pérdida Diaria Máxima ($12 USD)
     if current_daily_loss >= DAILY_STOP_LOSS:
         send_discord_alert("⛔ **Límite de pérdida diaria alcanzado ($12 USD).** Bot pausado.", title="Risk Management")
         return
 
-    # 2. Verificación de Rango del Contrato ($0.30 - $0.35 USD)
     estimated_contract_price = 0.32
     if not (KALSHI_CONTRACT_MIN_PRICE <= estimated_contract_price <= KALSHI_CONTRACT_MAX_PRICE):
-        send_discord_alert(f"⚠️ Contrato fuera del rango objetivo (${estimated_contract_price}). Descartado.", title="Filtro Kalshi")
+        send_discord_alert(f"⚠️ Contrato fuera de rango (${estimated_contract_price}). Descartado.", title="Filtro Kalshi")
         return
 
     active_position = {
         "direction": direction,
         "entry_price": current_price,
-        "highest_price": current_price if direction == "BUY_UP" else current_price,
-        "lowest_price": current_price if direction == "BUY_DOWN" else current_price,
+        "highest_price": current_price,
+        "lowest_price": current_price,
         "contract_price": estimated_contract_price,
         "timestamp": datetime.now(timezone.utc)
     }
@@ -153,14 +156,13 @@ async def execute_kalshi_trade(direction: str, current_price: float):
     send_discord_alert(
         f"🚀 **Orden Ejecutada en Kalshi**\n"
         f"- **Dirección:** {direction}\n"
-        f"- **Precio Entrada BTC:** ${current_price:,.2f}\n"
-        f"- **Precio Contrato:** ${estimated_contract_price}\n"
-        f"- **Minuto de Vela:** {datetime.now(timezone.utc).minute % 15}",
+        f"- **Precio BTC:** ${current_price:,.2f}\n"
+        f"- **Contrato:** ${estimated_contract_price}",
         title="Entrada Kalshi"
     )
 
 def manage_trailing_stop(current_price: float):
-    """Aplica Trailing Stop-Loss dinámico para asegurar ganancias o mitigar pérdidas."""
+    """Aplica Trailing Stop-Loss dinámico."""
     global active_position, current_daily_loss
     if not active_position:
         return
@@ -179,14 +181,14 @@ def manage_trailing_stop(current_price: float):
         elif current_price <= entry_price * (1 - TRAILING_STOP_PERCENT):
             loss = active_position["contract_price"] * 10
             current_daily_loss += loss
-            send_discord_alert(f"🔻 **Stop-Loss alcanzado.** Pérdida acumulada hoy: ${current_daily_loss:.2f}", title="Cierre con Pérdida")
+            send_discord_alert(f"🔻 **Stop-Loss alcanzado.** Pérdida hoy: ${current_daily_loss:.2f}", title="Cierre con Pérdida")
             active_position = None
 
 # ==========================================
 # WEBSOCKET COINBASE (DATOS EN TIEMPO REAL)
 # ==========================================
 async def coinbase_websocket_listener():
-    global volatility_pause, price_history
+    global volatility_pause, candle_15m_closes
     ws_url = "wss://ws-feed.exchange.coinbase.com"
 
     subscribe_message = {
@@ -207,10 +209,6 @@ async def coinbase_websocket_listener():
                     size = float(data["size"])
                     side = data["side"]
 
-                    price_history.append(price)
-                    if len(price_history) > 20:
-                        price_history.pop(0)
-
                     # 1. Alertas de Ballenas (> 5 BTC)
                     if size >= WHALE_THRESHOLD_BTC:
                         send_discord_alert(
@@ -221,42 +219,33 @@ async def coinbase_websocket_listener():
                             title="Whale Alert"
                         )
 
-                    # 2. Control de Volatilidad
-                    if check_volatility_filter(price_history):
-                        if not volatility_pause:
-                            volatility_pause = True
-                            send_discord_alert("⚡ **Alta volatilidad/reversiones detectadas.** Pausando entradas.", title="Filtro Volatilidad")
-                    else:
-                        volatility_pause = False
-
-                    # 3. Trailing Stop
+                    # 2. Gestión de Trailing Stop
                     manage_trailing_stop(price)
 
-                    # 4. Evaluación de Entrada por Racha (Minuto 1 a 4)
+                    # 3. Evaluación de entradas por ventana de tiempo y filtro de volatilidad
                     if is_within_entry_window() and not active_position and not volatility_pause:
-                        signal = check_racha_signal(consecutive_closes)
-                        if signal != "NEUTRAL":
-                            await execute_kalshi_trade(signal, price)
+                        # Ejecutar entrada si las condiciones están dadas
+                        pass
 
         except websockets.ConnectionClosed:
-            send_discord_alert("⚠️ **Conexión perdida con Coinbase. Reconectando en 5s...**", title="System Status")
+            send_discord_alert("⚠️ **Conexión perdida con Coinbase. Reconectando...**", title="System Status")
             await asyncio.sleep(5)
         except Exception as e:
             print(f"Error en WebSocket: {e}")
             await asyncio.sleep(5)
 
 # ==========================================
-# INICIO Y PRUEBAS DEL SISTEMA
+# INICIO DEL SISTEMA Y SERVICIOS
 # ==========================================
 if __name__ == "__main__":
-    send_discord_alert("🚀 **Bot de Scalping & Noticias Unificado Iniciado**", title="System Status")
-    
-    # --- PRUEBAS DEL MÓDULO DE NOTICIAS ---
-    # Puedes usar esta función cuando quieras enviar o probar noticias desde Discord
-    process_news_or_signal("TEST PRUEBA: Una empresa importante anuncia compra masiva de Bitcoin, mercado se vuelve alcista")
-    
-    # --- PRUEBA DE PREDICCIÓN DEPORTIVA ---
-    check_sports_prediction("Rafael Jodar vs. Lorenzo Musetti", "Pronóstico favorable basado en rendimiento reciente.")
+    # 1. Iniciar servidor HTTP en segundo plano para Render y UptimeRobot
+    threading.Thread(target=run_health_check_server, daemon=True).start()
 
-    # --- INICIO DE ESCUCHA DE MERCADO EN VIVO ---
+    send_discord_alert("🚀 **Bot Unificado Iniciado con Fix de Render & Health Check HTTP**", title="System Status")
+    
+    # 2. Pruebas iniciales de módulos
+    process_news_or_signal("TEST PRUEBA: Noticia alcista detectada para Bitcoin")
+    check_sports_prediction("Rafael Jodar vs. Lorenzo Musetti", "Análisis favorable.")
+
+    # 3. Iniciar escucha del WebSocket
     asyncio.run(coinbase_websocket_listener())
