@@ -1,9 +1,14 @@
 import os
 import time
+import base64
 import requests
 import datetime
-from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives import serialization
 
 # ==========================================
 # 1. HTTP SERVER FOR RENDER HEALTH CHECKS
@@ -29,56 +34,93 @@ server_thread.start()
 
 
 # ==========================================
-# 2. CONFIGURACIÓN Y CREDENCIALES
+# 2. CONFIGURACIÓN Y AUTENTICACIÓN RSA KALSHI
 # ==========================================
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "")
-KALSHI_API_KEY = os.environ.get("KALSHI_API_KEY", "")  # Agrega tu API Key en Render (Environment)
+KALSHI_KEY_ID = os.environ.get("KALSHI_KEY_ID", "")
+KALSHI_PRIVATE_KEY_PEM = os.environ.get("KALSHI_PRIVATE_KEY", "")
 
-def get_kalshi_headers():
-    headers = {
-        "Accept": "application/json",
-        "Content-Type": "application/json"
-    }
-    if KALSHI_API_KEY:
-        headers["Authorization"] = f"Bearer {KALSHI_API_KEY}"
-    return headers
+def get_kalshi_headers(method: str, path: str) -> dict:
+    """
+    Genera los headers necesarios para la API v2 de Kalshi usando firma RSA.
+    """
+    if not KALSHI_KEY_ID or not KALSHI_PRIVATE_KEY_PEM:
+        print("[AUTH WARNING] KALSHI_KEY_ID o KALSHI_PRIVATE_KEY no configurados.")
+        return {"Content-Type": "application/json"}
+
+    try:
+        # Formatear la clave privada por si vienen saltos de línea escapados (\n)
+        formatted_pem = KALSHI_PRIVATE_KEY_PEM.replace('\\n', '\n').strip()
+
+        # Timestamp en milisegundos
+        timestamp = str(int(time.time() * 1000))
+        
+        # Mensaje requerido por Kalshi: timestamp + método + ruta (sin dominio)
+        msg_string = f"{timestamp}{method.upper()}{path}"
+        msg_bytes = msg_string.encode('utf-8')
+
+        # Cargar clave privada
+        private_key = serialization.load_pem_private_key(
+            formatted_pem.encode('utf-8'),
+            password=None
+        )
+
+        # Firmar mensaje usando RSA-PSS
+        signature = private_key.sign(
+            msg_bytes,
+            padding.PSS(
+                mgf=padding.MGF1(hashes.SHA256()),
+                salt_length=padding.PSS.DIGEST_LENGTH
+            ),
+            hashes.SHA256()
+        )
+
+        signature_b64 = base64.b64encode(signature).decode('utf-8')
+
+        return {
+            "KALSHI-ACCESS-KEY": KALSHI_KEY_ID.strip(),
+            "KALSHI-ACCESS-SIGNATURE": signature_b64,
+            "KALSHI-ACCESS-TIMESTAMP": timestamp,
+            "Content-Type": "application/json"
+        }
+    except Exception as e:
+        print(f"[AUTH ERROR] Error firmando la petición: {e}")
+        return {"Content-Type": "application/json"}
+
 
 def send_discord_alert(payload):
     if not DISCORD_WEBHOOK_URL:
-        print("[DISCORD] Webhook URL not configured. Skipping notification.")
+        print("[DISCORD] Webhook URL no configurada.")
         return
     try:
         res = requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=10)
         if res.status_code not in [200, 204]:
-            print(f"[DISCORD] Error sending alert: {res.status_code}")
+            print(f"[DISCORD] Error enviando alerta: {res.status_code}")
     except Exception as e:
-        print(f"[DISCORD] Exception when sending alert: {e}")
+        print(f"[DISCORD] Excepción enviando alerta: {e}")
 
 
 # ==========================================
 # 3. BITCOIN 15M PREDICTION LOGIC
 # ==========================================
 def check_btc_15m_markets():
-    """
-    Monitors Bitcoin 15-minute prediction markets on Kalshi.
-    Calculates bullish/bearish streaks and notifies Discord of market shifts.
-    """
     try:
         print("[BTC 15M] Evaluating Bitcoin 15m prediction market...")
 
-        url = "https://trading-api.kalshi.com/trade-api/v2/markets"
+        path = "/trade-api/v2/markets"
+        url = f"https://trading-api.kalshi.com{path}"
         params = {
             "limit": 10,
             "series_ticker": "KXBTC15M",
             "status": "open"
         }
-        
-        # Se agregan los headers con autenticación
-        headers = get_kalshi_headers()
-        
+
+        # Generar headers firmados criptográficamente
+        headers = get_kalshi_headers("GET", path)
+
         response = requests.get(url, headers=headers, params=params, timeout=10)
         if response.status_code != 200:
-            print(f"[BTC 15M] Error querying Kalshi API: {response.status_code}")
+            print(f"[BTC 15M] Error querying Kalshi API: {response.status_code} - {response.text}")
             return
 
         data = response.json()
@@ -123,7 +165,7 @@ def check_btc_15m_markets():
             print(f"[BTC 15M] Notification sent to Discord: {estado_mercado} ({prob_yes}%)")
 
     except Exception as e:
-        print(f"[BTC 15M] Error during execution: {e}")
+        print(f"[BTC 15M] Error durante la ejecución: {e}")
 
 
 # ==========================================
@@ -134,7 +176,7 @@ def scan_sports_markets():
         print("[SPORTS] Scanning live sports markets...")
         pass
     except Exception as e:
-        print(f"[SPORTS] Error during execution: {e}")
+        print(f"[SPORTS] Error durante la ejecución: {e}")
 
 
 # ==========================================
@@ -142,7 +184,6 @@ def scan_sports_markets():
 # ==========================================
 if __name__ == "__main__":
     print("[BOT] Starting automated trading monitor...")
-    
     cycle_counter = 0
 
     while True:
