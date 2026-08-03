@@ -66,7 +66,7 @@ def send_discord_notification(title, description, color=0x3498db):
             "title": title,
             "description": description,
             "color": color,
-            "footer": {"text": "Bot de Monitoreo de Mercado & Noticas / Kalshi"}
+            "footer": {"text": "Bot de Monitoreo de Mercado & Noticias / Kalshi"}
         }]
     }
     try:
@@ -128,17 +128,20 @@ def process_market_event(source, author, content):
 # ==========================================
 # 5. MÓDULO DE PRONÓSTICOS DEPORTIVOS Y KALSHI
 # ==========================================
-def format_sports_signal(sport_emoji, sport_name, home_team, away_team, pick_type, winner_team, odds, confidence):
+def format_sports_signal(sport_emoji, sport_name, home_team, away_team, pick_type, winner_or_line, odds, confidence):
     """
-    Formatea las señales deportivas asegurando que se incluya el nombre del equipo o jugador 
-    junto al tipo de pronóstico (e.g., 'Gana Local (R. Nadal)').
+    Formatea las señales deportivas detallando:
+    - Para ganador: Nombre explícito del equipo/jugador ganador (ej. Gana Local (R. Nadal)).
+    - Para Over/Under: El tipo y valor total explícito (ej. Over 218.5 Puntos / Under 8.5 Carreras / Over 2.5 Goles).
     """
     if pick_type == "Gana Local":
         prediction_str = f"Gana Local ({home_team})"
     elif pick_type == "Gana Visitante":
         prediction_str = f"Gana Visitante ({away_team})"
+    elif pick_type in ["Over", "Under"]:
+        prediction_str = f"{pick_type} {winner_or_line}"  # ej. "Over 218.5 Puntos" o "Under 2.5 Goles"
     else:
-        prediction_str = f"{pick_type} ({winner_team})"
+        prediction_str = f"{pick_type} ({winner_or_line})"
 
     title = f"🎯 SEÑAL - {sport_emoji} {sport_name.upper()}"
     description = (
@@ -183,7 +186,7 @@ if __name__ == "__main__":
         "- **10+ Personas Influyentes** (Musk, Trump, Powell, Saylor, etc.)\n"
         "- **10+ Empresas Clave** (MicroStrategy, Tesla, BlackRock, Nvidia, etc.)\n"
         "- **Plataformas:** X, Truth Social y Noticias de Wall Street\n"
-        "- **Alertas Deportivas Clarificadas** (Nombre explícito del equipo/jugador)\n"
+        "- **Alertas Deportivas Detalladas** (Nombre del ganador + Líneas de Over/Under)\n"
         "- **Control de Volatilidad:** 15 Minutos",
         color=0x3498db
     )
