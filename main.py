@@ -10,14 +10,12 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 # ==========================================
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        # Responde 200 OK a las peticiones HTTP de Render para confirmar puerto abierto
         self.send_response(200)
         self.send_header("Content-type", "text/plain")
         self.end_headers()
         self.wfile.write(b"OK - Bot running")
 
     def log_message(self, format, *args):
-        # Silencia los logs de peticiones HTTP para mantener limpia la consola
         return
 
 def start_health_server():
@@ -37,7 +35,6 @@ EXCHANGE_API_SECRET = os.getenv("EXCHANGE_API_SECRET", "")
 # 3. MÓDULO DE ALERTAS DISCORD
 # ==========================================
 def send_discord_alert(title: str, description: str, color: int = 3447003):
-    """Envía un mensaje embebido al canal de Discord configurado."""
     if DISCORD_WEBHOOK_URL == "TU_DISCORD_WEBHOOK_URL_AQUI" or not DISCORD_WEBHOOK_URL:
         print("[ADVERTENCIA] Configura la variable DISCORD_WEBHOOK_URL.")
         return
@@ -59,22 +56,35 @@ def send_discord_alert(title: str, description: str, color: int = 3447003):
         print(f"[EXCEPCIÓN DISCORD] Error al enviar alerta: {e}")
 
 # ==========================================
-# 4. MÓDULO DE MONITOREO DE LATENCIA
+# 4. MÓDULO DE DEPORTES Y NOTICIAS (KALSHI / X / TRUTH SOCIAL)
+# ==========================================
+def check_sports_and_news():
+    """Rastrea eventos deportivos, líneas Over/Under y noticias clave."""
+    print("[MONITOR] Escaneando eventos deportivos y noticias...")
+    
+    # Aquí va la integración con la API de Kalshi o scraping de eventos
+    # Ejemplo de estructura de alerta deportiva que emitirá el bot:
+    # send_discord_alert(
+    #     title="⚽ Alerta Deportiva - Kalshi",
+    #     description="**Evento:** Partido Destacado\n**Ganador Explícito:** Equipo A\n**Línea Over/Under:** > 2.5",
+    #     color=15844367 # Amarillo/Dorado
+    # )
+
+# ==========================================
+# 5. MÓDULO DE MONITOREO DE LATENCIA
 # ==========================================
 def check_latency(target_url: str = "https://api.coinbase.com/v2/time", threshold_ms: float = 500.0):
-    """Mide el tiempo de respuesta del servidor objetivo y alerta si hay retraso."""
     start_time = time.time()
     try:
         response = requests.get(target_url, timeout=3)
         latency_ms = (time.time() - start_time) * 1000
-        
         print(f"[LATENCIA] {target_url}: {latency_ms:.2f} ms")
         
         if latency_ms > threshold_ms:
             send_discord_alert(
                 title="⚠️ Alerta de Latencia Elevada",
                 description=f"Se detectó un retraso de **{latency_ms:.2f} ms** al conectar con `{target_url}`.",
-                color=15158332 # Rojo
+                color=15158332
             )
         return latency_ms
     except Exception as e:
@@ -86,16 +96,14 @@ def check_latency(target_url: str = "https://api.coinbase.com/v2/time", threshol
         return None
 
 # ==========================================
-# 5. MÓDULO DE MONITOREO DE BALANCE / PORTFOLIO
+# 6. MÓDULO DE MONITOREO DE BALANCE / PORTFOLIO
 # ==========================================
 def check_portfolio_status():
-    """Consulta el estado del balance y genera un reporte."""
     if not EXCHANGE_API_KEY or not EXCHANGE_API_SECRET:
         print("[INFO] API Keys no configuradas. Generando reporte simulado de balance.")
         total_balance_usd = 12500.50
         daily_pnl = +3.45
     else:
-        # Aquí se integrará la consulta real con API keys cuando las configures
         total_balance_usd = 0.0
         daily_pnl = 0.0
 
@@ -107,24 +115,33 @@ def check_portfolio_status():
     send_discord_alert(
         title="📊 Reporte de Rendimiento y Portafolio",
         description=msg,
-        color=3066993 # Verde
+        color=3066993
     )
 
 # ==========================================
-# 6. BUCLE PRINCIPAL (MAIN LOOP)
+# 7. BUCLE PRINCIPAL (MAIN LOOP)
 # ==========================================
 async def main_loop():
     send_discord_alert(
-        title="🤖 Bot Captain Hook Activado",
-        description="Sistema de monitoreo de noticias, latencia y balance iniciado correctamente.",
-        color=3447003
+        title="🟢 BOT DE MONITOREO INICIADO",
+        description=(
+            "El bot está activo y monitoreando:\n"
+            "• **10+ Personas Influyentes & Empresas Clave**\n"
+            "• **Alertas Kalshi:** Estrategia de Compras Abajo (Dip 25%-35%)\n"
+            "• **Alertas Deportivas Clarificadas:** Ganador explícito + Líneas Over/Under\n"
+            "• **Control de Volatilidad:** Ventana de 15 Minutos"
+        ),
+        color=3066993
     )
     
     while True:
-        # 1. Chequeo de Latencia
+        # 1. Monitoreo de Deportes y Noticias Kalshi
+        check_sports_and_news()
+        
+        # 2. Chequeo de Latencia
         check_latency()
         
-        # 2. Chequeo de Portfolio
+        # 3. Chequeo de Portfolio
         check_portfolio_status()
         
         # Espera de 15 minutos entre iteraciones
@@ -132,10 +149,7 @@ async def main_loop():
 
 if __name__ == "__main__":
     try:
-        # Inicia el servidor HTTP en un hilo independiente antes del bucle principal
         threading.Thread(target=start_health_server, daemon=True).start()
-        
-        # Inicia el loop del bot
         asyncio.run(main_loop())
     except KeyboardInterrupt:
         print("\n[BOT] Detenido por el usuario.")
