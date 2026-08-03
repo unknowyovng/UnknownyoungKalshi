@@ -31,6 +31,10 @@ DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "TU_DISCORD_WEBHOOK_URL_A
 EXCHANGE_API_KEY = os.getenv("EXCHANGE_API_KEY", "")
 EXCHANGE_API_SECRET = os.getenv("EXCHANGE_API_SECRET", "")
 
+# Configuración del Filtro de Volatilidad (Sensibilidad Bajada)
+VOLATILITY_THRESHOLD = 0.08  # Subido a 8% para permitir fluctuaciones normales sin pausar entradas
+ENABLE_VOLATILITY_FILTER = True # Cambiar a False si prefieres apagarlo por completo
+
 # ==========================================
 # 3. DISCORD NOTIFICATION MODULE
 # ==========================================
@@ -145,8 +149,8 @@ async def main():
             "**Configuración Activa:**\n"
             "• **Monitoreo Deportivo:** Escaneo cada **1 minuto** (Alta velocidad)\n"
             "• **Mercado BTC 15M:** Monitoreo cada **15 minutos**\n"
-            "• **Noticias & Ballenas:** Disparo **Instantáneo**\n"
-            "• **Health Check:** Puerto activo en Render"
+            "• **Filtro Volatilidad:** Umbral ajustado al 8% (Mayor tolerancia)\n"
+            "• **Health Check:** Servidor HTTP activo en Render"
         ),
         color=3066993
     )
@@ -159,7 +163,7 @@ async def main():
 
 if __name__ == "__main__":
     try:
-        # Servidor HTTP para Render (evita cierres por falta de puerto)
+        # Servidor HTTP para Render (mantiene viva la instancia)
         threading.Thread(target=start_health_server, daemon=True).start()
         # Bucle principal de eventos
         asyncio.run(main())
