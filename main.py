@@ -1,6 +1,7 @@
 import os
 import asyncio
 import threading
+from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import aiohttp
 import discord
@@ -39,7 +40,7 @@ target_kalshi_auto = None
 ultima_senal_enviada = None
 
 UMBRAL_BALLENA_BTC = 5.0  
-MARGEN_MINIMO_CONFIRMACION = 5.0  # Requiere $5 por encima del target para evitar falsas alertas por ruido
+MARGEN_MINIMO_CONFIRMACION = 5.0  # Requiere $5 por encima del target para confirmar la compra
 
 # ==========================================
 # 3. COMANDOS DE DISCORD (!target)
@@ -102,7 +103,6 @@ async def obtener_precio_btc(session):
 async def obtener_price_to_beat_kalshi(session):
     """
     Obtiene el precio de APERTURA (Open) de la vela de 15m actual en Coinbase.
-    Este valor coincide exactamente con el 'Price to beat' de Kalshi.
     """
     url = "https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=900"
     headers = {"User-Agent": "Mozilla/5.0"}
@@ -143,6 +143,7 @@ async def ciclo_monitoreo():
     global manual_target, modo_manual, target_kalshi_auto, ultima_senal_enviada
     
     canal = discord.utils.get(bot.get_all_channels(), name="alertas-kalshi")
+    ultimo_bloque_15m = None
 
     async with aiohttp.ClientSession() as session:
         while not bot.is_closed():
@@ -151,20 +152,31 @@ async def ciclo_monitoreo():
                     precio_btc = await obtener_precio_btc(session)
 
                     if precio_btc is not None:
-                        # Si está en modo automático, consulta el Open real de la vela de 15m de Coinbase
-                        if not modo_manual:
-                            target_kalshi_auto = await obtener_price_to_beat_kalshi(session)
+                        ahora = datetime.utcnow()
+                        minuto_bloque = (ahora.minute // 15) * 15
+                        bloque_actual = f"{ahora.hour}:{minuto_bloque:02d}"
+
+                        # Detectar cambio de bloque de 15m (00, 15, 30, 45) o primer inicio
+                        if ultimo_bloque_15m != bloque_actual or target_kalshi_auto is None:
+                            target_vela = await obtener_price_to_beat_kalshi(session)
+                            
+                            # Si la API de velas aún no cargó el Open, usar el precio spot en vivo del instante
+                            target_kalshi_auto = target_vela if target_vela else precio_btc
+                            
+                            ultimo_bloque_15m = bloque_actual
+                            ultima_senal_enviada = None  # Resetear alertas para el nuevo bloque
+                            print(f"🔄 [NUEVO BLOQUE {bloque_actual} UTC] Target Auto fijado en: ${target_kalshi_auto:,.2f}")
 
                         target_activo = manual_target if modo_manual and manual_target else target_kalshi_auto
 
                         if target_activo:
-                            print(f"🔍 Monitoreando... BTC Coinbase: ${precio_btc:,.2f} | Target Kalshi Real: ${target_activo:,.2f}")
+                            print(f"🔍 Monitoreando... BTC Coinbase: ${precio_btc:,.2f} | Target Kalshi: ${target_activo:,.2f}")
 
-                            # CONDICIÓN DE ENTRADA (COMPRAR UP con confirmación)
+                            # CONDICIÓN DE ENTRADA (COMPRAR UP)
                             if precio_btc > (target_activo + MARGEN_MINIMO_CONFIRMACION):
                                 accion = "COMPRAR UP 🚀"
                                 diferencia = precio_btc - target_activo
-                                identificador_senal = f"ENTRADA_{target_activo}"
+                                identificador_senal = f"ENTRADA_{target_activo}_{bloque_actual}"
 
                                 if ultima_senal_enviada != identificador_senal:
                                     embed = discord.Embed(
@@ -173,18 +185,18 @@ async def ciclo_monitoreo():
                                     )
                                     embed.add_field(name="Acción", value=f"🔥 **{accion}**", inline=False)
                                     embed.add_field(name="Precio BTC (Coinbase)", value=f"${precio_btc:,.2f}", inline=True)
-                                    embed.add_field(name="Target a Vencer (Kalshi)", value=f"${target_activo:,.2f}", inline=True)
+                                    embed.add_field(name="Target a Vencer", value=f"${target_activo:,.2f}", inline=True)
                                     embed.add_field(name="Margen A Favor", value=f"+${diferencia:,.2f}", inline=False)
 
                                     await canal.send(embed=embed)
                                     print(f"⚡ [SEÑAL KALSHI] {accion} | Target: ${target_activo:,.2f} | BTC: ${precio_btc:,.2f}")
                                     ultima_senal_enviada = identificador_senal
 
-                            # CONDICIÓN DE SALIDA / STOP LOSS (Si el precio cae $15 por debajo del target)
+                            # CONDICIÓN DE SALIDA / STOP LOSS (Caída de $15)
                             elif precio_btc < (target_activo - 15.0):
                                 accion = "SALIR / CERRAR OPERACIÓN 🛑"
                                 caida = target_activo - precio_btc
-                                identificador_senal = f"SALIDA_{target_activo}"
+                                identificador_senal = f"SALIDA_{target_activo}_{bloque_actual}"
 
                                 if ultima_senal_enviada != identificador_senal and ultima_senal_enviada is not None and "ENTRADA" in str(ultima_senal_enviada):
                                     embed = discord.Embed(
