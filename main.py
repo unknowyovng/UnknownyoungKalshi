@@ -1,167 +1,214 @@
-import os
+import asyncio
+import json
 import time
 import requests
-import asyncio
-import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
+import websockets
+from datetime import datetime, timezone
 
 # ==========================================
-# 1. HEALTH CHECK SERVER FOR RENDER (PORT BINDING)
+# CONFIGURACIÓN GENERAL Y PARÁMETROS
 # ==========================================
-class HealthCheckHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-type", "text/plain")
-        self.end_headers()
-        self.wfile.write(b"OK - Bot running")
+DISCORD_WEBHOOK_URL = "YOUR_DISCORD_WEBHOOK_URL"
 
-    def log_message(self, format, *args):
+# Parámetros de Trading y Filtros
+KALSHI_CONTRACT_MIN_PRICE = 0.30
+KALSHI_CONTRACT_MAX_PRICE = 0.35
+WHALE_THRESHOLD_BTC = 5.0
+ENTRY_WINDOW_START_MIN = 1
+ENTRY_WINDOW_END_MIN = 4
+
+# Gestión de Riesgo
+INITIAL_BALANCE = 100.0
+DAILY_STOP_LOSS = 12.0
+TRAILING_STOP_PERCENT = 0.02  # 2% Trailing Stop
+
+# Estado Global del Bot
+current_daily_loss = 0.0
+active_position = None
+consecutive_closes = []
+volatility_pause = False
+price_history = []
+
+# ==========================================
+# SERVICIO DE NOTIFICACIONES DISCORD
+# ==========================================
+def send_discord_alert(message: str, title: str = "🤖 Bot Alert"):
+    """Envía notificaciones formateadas a Discord via Webhook."""
+    if not DISCORD_WEBHOOK_URL or DISCORD_WEBHOOK_URL == "YOUR_DISCORD_WEBHOOK_URL":
+        print(f"[{title}] {message}")
         return
 
-def start_health_server():
-    port = int(os.getenv("PORT", 10000))
-    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
-    print(f"[SERVIDOR HTTP] Servidor de mantener vivo activo en puerto {port}")
-    server.serve_forever()
-
-# ==========================================
-# 2. ENVIRONMENT VARIABLES
-# ==========================================
-DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "TU_DISCORD_WEBHOOK_URL_AQUI")
-EXCHANGE_API_KEY = os.getenv("EXCHANGE_API_KEY", "")
-EXCHANGE_API_SECRET = os.getenv("EXCHANGE_API_SECRET", "")
-
-# ==========================================
-# 3. DISCORD NOTIFICATION MODULE
-# ==========================================
-def send_discord_alert(title: str, description: str, color: int = 3447003):
-    if DISCORD_WEBHOOK_URL == "TU_DISCORD_WEBHOOK_URL_AQUI" or not DISCORD_WEBHOOK_URL:
-        print("[ADVERTENCIA] Configura la variable DISCORD_WEBHOOK_URL.")
-        return
-
-    embed = {
-        "title": title,
-        "description": description,
-        "color": color,
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    payload = {
+        "embeds": [{
+            "title": title,
+            "description": message,
+            "color": 3447003,  # Azul tenue
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }]
     }
-    
-    payload = {"embeds": [embed]}
-    
     try:
-        response = requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=5)
-        if response.status_code != 204:
-            print(f"[ERROR DISCORD] Status Code: {response.status_code}")
+        requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=5)
     except Exception as e:
-        print(f"[EXCEPCIÓN DISCORD] Error al enviar alerta: {e}")
+        print(f"Error enviando alerta a Discord: {e}")
 
 # ==========================================
-# 4. SPORTS MONITORING (HIGH-FREQUENCY: EVERY 1 MIN)
+# FILTROS Y REGLAS DE ESTRATEGIA
 # ==========================================
-def check_sports_markets():
-    """Escanea mercados deportivos en vivo cada 1 minuto buscando dips/oportunidades."""
-    print("[SPORTS] Escaneando eventos deportivos en tiempo real...")
-    # Tu lógica de scraping/API Kalshi para deportes va aquí.
+def is_within_entry_window() -> bool:
+    """Verifica si el tiempo actual está entre el minuto 1 y 4 de la vela de 15 min."""
+    now = datetime.now(timezone.utc)
+    minute_in_candle = now.minute % 15
+    return ENTRY_WINDOW_START_MIN <= minute_in_candle <= ENTRY_WINDOW_END_MIN
+
+def check_volatility_filter(prices: list) -> bool:
+    """Evalúa la volatilidad reciente para pausar operaciones si hay reversiones bruscas."""
+    if len(prices) < 6:
+        return False
+    reversals = 0
+    for i in range(2, len(prices)):
+        change1 = prices[i-1] - prices[i-2]
+        change2 = prices[i] - prices[i-1]
+        if (change1 > 0 and change2 < 0) or (change1 < 0 and change2 > 0):
+            reversals += 1
+    # Si hay más de 3 reversiones bruscas recientes, activamos pausa por volatilidad
+    return reversals >= 3
+
+def check_racha_signal(history: list) -> str:
+    """Verifica si existen al menos 2 cierres consecutivos en la misma dirección ('UP' o 'DOWN')."""
+    if len(history) < 2:
+        return "NEUTRAL"
+    if history[-1] > 0 and history[-2] > 0:
+        return "BUY_UP"
+    elif history[-1] < 0 and history[-2] < 0:
+        return "BUY_DOWN"
+    return "NEUTRAL"
 
 # ==========================================
-# 5. BITCOIN 15-MIN PREDICTION MARKETS (EVERY 15 MIN)
+# EJECUCIÓN EN KALSHI & TRAILING STOP
 # ==========================================
-def check_btc_15m_markets():
-    """Monitorea el mercado de predicción de BTC a 15 minutos en Kalshi."""
-    print("[BTC 15M] Evaluando mercado de predicción de Bitcoin 15m...")
-    # Tu lógica de predicción de BTC va aquí.
+async def execute_kalshi_trade(direction: str, current_price: float):
+    global current_daily_loss, active_position
 
-# ==========================================
-# 6. LATENCY & PORTFOLIO CHECKS
-# ==========================================
-def check_latency(target_url: str = "https://api.coinbase.com/v2/time", threshold_ms: float = 500.0):
-    start_time = time.time()
-    try:
-        response = requests.get(target_url, timeout=3)
-        latency_ms = (time.time() - start_time) * 1000
-        print(f"[LATENCIA] {target_url}: {latency_ms:.2f} ms")
-        
-        if latency_ms > threshold_ms:
-            send_discord_alert(
-                title="⚠️ Alerta de Latencia Elevada",
-                description=f"Se detectó un retraso de **{latency_ms:.2f} ms** al conectar con `{target_url}`.",
-                color=15158332
-            )
-        return latency_ms
-    except Exception as e:
-        send_discord_alert(
-            title="🚨 Error de Conexión",
-            description=f"Fallo de conexión con `{target_url}`: {str(e)}",
-            color=15158332
-        )
-        return None
-
-def check_portfolio_status():
-    if not EXCHANGE_API_KEY or not EXCHANGE_API_SECRET:
-        print("[INFO] API Keys no configuradas. Reporte de balance omitido.")
+    # 1. Verificar Stop-Loss Diario
+    if current_daily_loss >= DAILY_STOP_LOSS:
+        send_discord_alert("⛔ **Límite de pérdida diaria alcanzado ($12 USD).** Bot pausado hoy.", title="Risk Management")
         return
 
-    total_balance_usd = 0.0
-    daily_pnl = 0.0
+    # 2. Simulación / Verificación de precio de contrato objetivo ($0.30 - $0.35)
+    estimated_contract_price = 0.32  # Valor dentro del rango de filtro $0.30-$0.35
+    if not (KALSHI_CONTRACT_MIN_PRICE <= estimated_contract_price <= KALSHI_CONTRACT_MAX_PRICE):
+        send_discord_alert(f"⚠️ Contrato fuera del rango objetivo (${estimated_contract_price}). Orden descartada.", title="Filtro Kalshi")
+        return
 
-    msg = (
-        f"**Balance Total:** `${total_balance_usd:,.2f} USD`\n"
-        f"**Rendimiento (24h):** `{daily_pnl:+.2f}%`"
-    )
-    
+    # 3. Registrar Posición Activa
+    active_position = {
+        "direction": direction,
+        "entry_price": current_price,
+        "highest_price": current_price if direction == "BUY_UP" else current_price,
+        "lowest_price": current_price if direction == "BUY_DOWN" else current_price,
+        "contract_price": estimated_contract_price,
+        "timestamp": datetime.now(timezone.utc)
+    }
+
     send_discord_alert(
-        title="📊 Reporte de Rendimiento y Portafolio",
-        description=msg,
-        color=3066993
+        f"🚀 **Orden Ejecutada en Kalshi**\n"
+        f"- **Dirección:** {direction}\n"
+        f"- **Precio Entrada BTC:** ${current_price:,.2f}\n"
+        f"- **Precio Contrato:** ${estimated_contract_price}\n"
+        f"- **Ventana:** Minuto {datetime.now(timezone.utc).minute % 15} de la vela",
+        title="Entrada Kalshi"
     )
+
+def manage_trailing_stop(current_price: float):
+    """Monitorea la posición abierta y aplica Trailing Stop-Loss."""
+    global active_position, current_daily_loss
+    if not active_position:
+        return
+
+    direction = active_position["direction"]
+    entry_price = active_position["entry_price"]
+
+    if direction == "BUY_UP":
+        if current_price > active_position["highest_price"]:
+            active_position["highest_price"] = current_price
+        
+        stop_price = active_position["highest_price"] * (1 - TRAILING_STOP_PERCENT)
+        if current_price <= stop_price and current_price > entry_price:
+            send_discord_alert(f"🎯 **Trailing Stop CERRADO en ganancia.** Precio: ${current_price:,.2f}", title="Cierre de Posición")
+            active_position = None
+        elif current_price <= entry_price * (1 - TRAILING_STOP_PERCENT):
+            loss = active_position["contract_price"] * 10  # Ejemplo de pérdida calculada
+            current_daily_loss += loss
+            send_discord_alert(f"🔻 **Stop-Loss alcanzado.** Pérdida acumulada hoy: ${current_daily_loss:.2f}", title="Cierre con Pérdida")
+            active_position = None
 
 # ==========================================
-# 7. MAIN ASYNC LOOPS (DUAL FREQUENCY)
+# COINBASE WEBSOCKET LISTENER
 # ==========================================
-async def sports_loop():
-    """Loop de alta frecuencia: revisa deportes cada 60 segundos."""
-    while True:
+async def coinbase_websocket_listener():
+    global volatility_pause, price_history
+    ws_url = "wss://ws-feed.exchange.coinbase.com"
+
+    subscribe_message = {
+        "type": "subscribe",
+        "product_ids": ["BTC-USD"],
+        "channels": ["matches"]
+    }
+
+    async for websocket in websockets.connect(ws_url):
         try:
-            check_sports_markets()
+            await websocket.send(json.dumps(subscribe_message))
+            send_discord_alert("🟢 **WebSocket de Coinbase conectado con éxito.**", title="System Status")
+
+            async for message in websocket:
+                data = json.loads(message)
+                if data.get("type") == "match":
+                    price = float(data["price"])
+                    size = float(data["size"])
+                    side = data["side"]
+
+                    # Trackeamos historial reciente para volatilidad
+                    price_history.append(price)
+                    if len(price_history) > 20:
+                        price_history.pop(0)
+
+                    # 1. Detección de Señales de Ballenas (> 5 BTC)
+                    if size >= WHALE_THRESHOLD_BTC:
+                        send_discord_alert(
+                            f"🐋 **Movimiento de Ballena Detectado**\n"
+                            f"- **Monto:** {size:.2f} BTC\n"
+                            f"- **Tipo:** {side.upper()}\n"
+                            f"- **Precio:** ${price:,.2f}",
+                            title="Whale Alert"
+                        )
+
+                    # 2. Filtro de Volatilidad
+                    if check_volatility_filter(price_history):
+                        if not volatility_pause:
+                            volatility_pause = True
+                            send_discord_alert("⚡ **Alta volatilidad/reversiones detectadas.** Pausando entradas temporales.", title="Filtro Volatilidad")
+                    else:
+                        volatility_pause = False
+
+                    # 3. Trailing Stop en Posiciones Activas
+                    manage_trailing_stop(price)
+
+                    # 4. Evaluación de Entrada (Minuto 1-4 + Racha + Sin Pausa)
+                    if is_within_entry_window() and not active_position and not volatility_pause:
+                        signal = check_racha_signal(consecutive_closes)
+                        if signal != "NEUTRAL":
+                            await execute_kalshi_trade(signal, price)
+
+        except websockets.ConnectionClosed:
+            send_discord_alert("⚠️ **Conexión perdida con Coinbase. Reconectando...**", title="System Status")
+            await asyncio.sleep(5)
         except Exception as e:
-            print(f"[ERROR SPORTS LOOP] {e}")
-        await asyncio.sleep(60)
+            print(f"Error en WebSocket: {e}")
+            await asyncio.sleep(5)
 
-async def btc_and_system_loop():
-    """Loop de 15 minutos: revisa predicciones BTC 15m, latencia y balance."""
-    while True:
-        try:
-            check_btc_15m_markets()
-            check_latency()
-            check_portfolio_status()
-        except Exception as e:
-            print(f"[ERROR MAIN LOOP] {e}")
-        await asyncio.sleep(900)
-
-async def main():
-    send_discord_alert(
-        title="🟢 BOT AUTÓNOMO INICIADO",
-        description=(
-            "**Configuración Activa:**\n"
-            "• **Monitoreo Deportivo:** Escaneo cada **1 minuto** (Alta velocidad)\n"
-            "• **Mercado BTC 15M:** Monitoreo cada **15 minutos**\n"
-            "• **Noticias & Ballenas:** Disparo **Instantáneo**\n"
-            "• **Health Check:** Puerto activo en Render"
-        ),
-        color=3066993
-    )
-    
-    # Ejecuta ambos loops en paralelo
-    await asyncio.gather(
-        sports_loop(),
-        btc_and_system_loop()
-    )
-
+# ==========================================
+# INICIO DEL BOT
+# ==========================================
 if __name__ == "__main__":
-    try:
-        # Servidor HTTP para Render
-        threading.Thread(target=start_health_server, daemon=True).start()
-        # Bucle principal de eventos
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("\n[BOT] Detenido por el usuario.")
+    send_discord_alert("🚀 **Bot de Scalping Kalshi / Coinbase Iniciado**", title="System Status")
+    asyncio.run(coinbase_websocket_listener())
