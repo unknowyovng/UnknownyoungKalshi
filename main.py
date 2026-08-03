@@ -1,171 +1,159 @@
 import os
 import time
 import requests
-import asyncio
-import threading
+import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
+import threading
 
 # ==========================================
-# 1. HEALTH CHECK SERVER FOR RENDER (PORT BINDING)
+# 1. HTTP SERVER FOR RENDER HEALTH CHECKS
 # ==========================================
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.send_header("Content-type", "text/plain")
         self.end_headers()
-        self.wfile.write(b"OK - Bot running")
+        self.wfile.write(b"OK - Bot is running")
 
     def log_message(self, format, *args):
+        # Suppress standard HTTP logging to keep console clean
         return
 
-def start_health_server():
-    port = int(os.getenv("PORT", 10000))
+def run_http_server():
+    port = int(os.environ.get("PORT", 10000))
     server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
-    print(f"[SERVIDOR HTTP] Servidor de mantener vivo activo en puerto {port}")
+    print(f"[SERVER] Web server started on port {port}")
     server.serve_forever()
 
-# ==========================================
-# 2. ENVIRONMENT VARIABLES
-# ==========================================
-DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "TU_DISCORD_WEBHOOK_URL_AQUI")
-EXCHANGE_API_KEY = os.getenv("EXCHANGE_API_KEY", "")
-EXCHANGE_API_SECRET = os.getenv("EXCHANGE_API_SECRET", "")
+# Start HTTP server in a background thread
+server_thread = threading.Thread(target=run_http_server, daemon=True)
+server_thread.start()
 
-# Configuración del Filtro de Volatilidad (Sensibilidad Bajada)
-VOLATILITY_THRESHOLD = 0.08  # Subido a 8% para permitir fluctuaciones normales sin pausar entradas
-ENABLE_VOLATILITY_FILTER = True # Cambiar a False si prefieres apagarlo por completo
 
 # ==========================================
-# 3. DISCORD NOTIFICATION MODULE
+# 2. DISCORD NOTIFICATION HELPER
 # ==========================================
-def send_discord_alert(title: str, description: str, color: int = 3447003):
-    if DISCORD_WEBHOOK_URL == "TU_DISCORD_WEBHOOK_URL_AQUI" or not DISCORD_WEBHOOK_URL:
-        print("[ADVERTENCIA] Configura la variable DISCORD_WEBHOOK_URL.")
+DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "")
+
+def send_discord_alert(payload):
+    if not DISCORD_WEBHOOK_URL:
+        print("[DISCORD] Webhook URL not configured. Skipping notification.")
         return
-
-    embed = {
-        "title": title,
-        "description": description,
-        "color": color,
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    }
-    
-    payload = {"embeds": [embed]}
-    
     try:
-        response = requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=5)
-        if response.status_code != 204:
-            print(f"[ERROR DISCORD] Status Code: {response.status_code}")
+        res = requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=10)
+        if res.status_code not in [200, 204]:
+            print(f"[DISCORD] Error sending alert: {res.status_code}")
     except Exception as e:
-        print(f"[EXCEPCIÓN DISCORD] Error al enviar alerta: {e}")
+        print(f"[DISCORD] Exception when sending alert: {e}")
+
 
 # ==========================================
-# 4. SPORTS MONITORING (HIGH-FREQUENCY: EVERY 1 MIN)
-# ==========================================
-def check_sports_markets():
-    """Escanea mercados deportivos en vivo cada 1 minuto buscando dips/oportunidades."""
-    print("[SPORTS] Escaneando eventos deportivos en tiempo real...")
-    # Agrega tu lógica de consulta/scraping de Kalshi aquí.
-
-# ==========================================
-# 5. BITCOIN 15-MIN PREDICTION MARKETS (EVERY 15 MIN)
+# 3. BITCOIN 15M PREDICTION LOGIC
 # ==========================================
 def check_btc_15m_markets():
-    """Monitorea el mercado de predicción de BTC a 15 minutos en Kalshi."""
-    print("[BTC 15M] Evaluando mercado de predicción de Bitcoin 15m...")
-    # Agrega tu lógica de consulta de BTC aquí.
-
-# ==========================================
-# 6. LATENCY & PORTFOLIO CHECKS
-# ==========================================
-def check_latency(target_url: str = "https://api.coinbase.com/v2/time", threshold_ms: float = 500.0):
-    start_time = time.time()
+    """
+    Monitors Bitcoin 15-minute prediction markets on Kalshi.
+    Calculates bullish/bearish streaks and notifies Discord of market shifts.
+    """
     try:
-        response = requests.get(target_url, timeout=3)
-        latency_ms = (time.time() - start_time) * 1000
-        print(f"[LATENCIA] {target_url}: {latency_ms:.2f} ms")
+        print("[BTC 15M] Evaluating Bitcoin 15m prediction market...")
+
+        url = "https://trading-api.kalshi.com/trade-api/v2/markets"
+        params = {
+            "limit": 10,
+            "series_ticker": "KXBTC15M",
+            "status": "open"
+        }
         
-        if latency_ms > threshold_ms:
-            send_discord_alert(
-                title="⚠️ Alerta de Latencia Elevada",
-                description=f"Se detectó un retraso de **{latency_ms:.2f} ms** al conectar con `{target_url}`.",
-                color=15158332
-            )
-        return latency_ms
+        response = requests.get(url, params=params, timeout=10)
+        if response.status_code != 200:
+            print(f"[BTC 15M] Error querying Kalshi API: {response.status_code}")
+            return
+
+        data = response.json()
+        markets = data.get("markets", [])
+
+        if not markets:
+            print("[BTC 15M] No active BTC 15m markets found.")
+            return
+
+        current_market = markets[0]
+        ticker = current_market.get("ticker")
+        yes_bid = current_market.get("yes_bid", 0)
+        yes_ask = current_market.get("yes_ask", 0)
+        last_price = current_market.get("last_price", 50)
+        
+        prob_yes = last_price
+
+        # Streak & Direction Analysis
+        estado_mercado = "NEUTRO"
+        emoji = "⚖️"
+
+        if prob_yes >= 65:
+            estado_mercado = "RACHA ALCISTA (BULLISH)"
+            emoji = "🚀"
+        elif prob_yes <= 35:
+            estado_mercado = "RACHA BAJISTA (BEARISH)"
+            emoji = "🔻"
+
+        if estado_mercado != "NEUTRO":
+            mensaje_discord = {
+                "embeds": [{
+                    "title": f"{emoji} Alerta BTC 15M - Mercado Kalshi",
+                    "description": f"**Ticker:** `{ticker}`\n"
+                                   f"**Estado/Racha:** **{estado_mercado}**\n"
+                                   f"**Probabilidad YES:** `{prob_yes}%`\n"
+                                   f"**Bid/Ask:** `{yes_bid}% / {yes_ask}%`",
+                    "color": 3066993 if "ALCISTA" in estado_mercado else 15158332,
+                    "timestamp": datetime.datetime.utcnow().isoformat()
+                }]
+            }
+            send_discord_alert(mensaje_discord)
+            print(f"[BTC 15M] Notification sent to Discord: {estado_mercado} ({prob_yes}%)")
+
     except Exception as e:
-        send_discord_alert(
-            title="🚨 Error de Conexión",
-            description=f"Fallo de conexión con `{target_url}`: {str(e)}",
-            color=15158332
-        )
-        return None
+        print(f"[BTC 15M] Error during execution: {e}")
 
-def check_portfolio_status():
-    if not EXCHANGE_API_KEY or not EXCHANGE_API_SECRET:
-        print("[INFO] API Keys no configuradas. Reporte de balance omitido.")
-        return
-
-    total_balance_usd = 0.0
-    daily_pnl = 0.0
-
-    msg = (
-        f"**Balance Total:** `${total_balance_usd:,.2f} USD`\n"
-        f"**Rendimiento (24h):** `{daily_pnl:+.2f}%`"
-    )
-    
-    send_discord_alert(
-        title="📊 Reporte de Rendimiento y Portafolio",
-        description=msg,
-        color=3066993
-    )
 
 # ==========================================
-# 7. MAIN ASYNC LOOPS (DUAL FREQUENCY)
+# 4. SPORTS MARKET SCANNER
 # ==========================================
-async def sports_loop():
-    """Loop de alta frecuencia: revisa deportes cada 60 segundos."""
-    while True:
-        try:
-            check_sports_markets()
-        except Exception as e:
-            print(f"[ERROR SPORTS LOOP] {e}")
-        await asyncio.sleep(60)
-
-async def btc_and_system_loop():
-    """Loop de 15 minutos: revisa predicciones BTC 15m, latencia y balance."""
-    while True:
-        try:
-            check_btc_15m_markets()
-            check_latency()
-            check_portfolio_status()
-        except Exception as e:
-            print(f"[ERROR MAIN LOOP] {e}")
-        await asyncio.sleep(900)
-
-async def main():
-    send_discord_alert(
-        title="🟢 BOT AUTÓNOMO INICIADO",
-        description=(
-            "**Configuración Activa:**\n"
-            "• **Monitoreo Deportivo:** Escaneo cada **1 minuto** (Alta velocidad)\n"
-            "• **Mercado BTC 15M:** Monitoreo cada **15 minutos**\n"
-            "• **Filtro Volatilidad:** Umbral ajustado al 8% (Mayor tolerancia)\n"
-            "• **Health Check:** Servidor HTTP activo en Render"
-        ),
-        color=3066993
-    )
-    
-    # Ejecuta ambos loops en paralelo
-    await asyncio.gather(
-        sports_loop(),
-        btc_and_system_loop()
-    )
-
-if __name__ == "__main__":
+def scan_sports_markets():
+    """
+    Scans live sports events on Kalshi for probability anomalies/mispricings.
+    """
     try:
-        # Servidor HTTP para Render (mantiene viva la instancia)
-        threading.Thread(target=start_health_server, daemon=True).start()
-        # Bucle principal de eventos
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("\n[BOT] Detenido por el usuario.")
+        print("[SPORTS] Scanning live sports markets...")
+        # Sports market retrieval and filtering logic
+        pass
+    except Exception as e:
+        print(f"[SPORTS] Error during execution: {e}")
+
+
+# ==========================================
+# 5. MAIN EXECUTION LOOP
+# ==========================================
+if __name__ == "__main__":
+    print("[BOT] Starting automated trading monitor...")
+    
+    # Counter to manage different scan frequencies
+    cycle_counter = 0
+
+    while True:
+        try:
+            # 1. Scan sports markets every loop (~60s)
+            scan_sports_markets()
+
+            # 2. Check BTC 15M predictions every 3 cycles (~3 minutes)
+            if cycle_counter % 3 == 0:
+                check_btc_15m_markets()
+
+            cycle_counter += 1
+            time.sleep(60)
+
+        except KeyboardInterrupt:
+            print("[BOT] Shutting down gracefully...")
+            break
+        except Exception as e:
+            print(f"[BOT] Unexpected error in main loop: {e}")
+            time.sleep(60)
