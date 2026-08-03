@@ -1,5 +1,6 @@
-websockets
+websockets 
 requests
+aiohttp
 discord.py
 cryptography
 pandas
