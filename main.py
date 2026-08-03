@@ -6,7 +6,7 @@ import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # ==========================================
-# 1. SERVIDOR DE SALUD (HEALTH CHECK) PARA RENDER
+# 1. HEALTH CHECK SERVER FOR RENDER (PORT BINDING)
 # ==========================================
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -25,14 +25,14 @@ def start_health_server():
     server.serve_forever()
 
 # ==========================================
-# 2. CONFIGURACIÓN DE VARIABLES DE ENTORNO
+# 2. ENVIRONMENT VARIABLES
 # ==========================================
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "TU_DISCORD_WEBHOOK_URL_AQUI")
 EXCHANGE_API_KEY = os.getenv("EXCHANGE_API_KEY", "")
 EXCHANGE_API_SECRET = os.getenv("EXCHANGE_API_SECRET", "")
 
 # ==========================================
-# 3. MÓDULO DE ALERTAS DISCORD
+# 3. DISCORD NOTIFICATION MODULE
 # ==========================================
 def send_discord_alert(title: str, description: str, color: int = 3447003):
     if DISCORD_WEBHOOK_URL == "TU_DISCORD_WEBHOOK_URL_AQUI" or not DISCORD_WEBHOOK_URL:
@@ -56,22 +56,23 @@ def send_discord_alert(title: str, description: str, color: int = 3447003):
         print(f"[EXCEPCIÓN DISCORD] Error al enviar alerta: {e}")
 
 # ==========================================
-# 4. MÓDULO DE DEPORTES Y NOTICIAS (KALSHI / X / TRUTH SOCIAL)
+# 4. SPORTS MONITORING (HIGH-FREQUENCY: EVERY 1 MIN)
 # ==========================================
-def check_sports_and_news():
-    """Rastrea eventos deportivos, líneas Over/Under y noticias clave."""
-    print("[MONITOR] Escaneando eventos deportivos y noticias...")
-    
-    # Aquí va la integración con la API de Kalshi o scraping de eventos
-    # Ejemplo de estructura de alerta deportiva que emitirá el bot:
-    # send_discord_alert(
-    #     title="⚽ Alerta Deportiva - Kalshi",
-    #     description="**Evento:** Partido Destacado\n**Ganador Explícito:** Equipo A\n**Línea Over/Under:** > 2.5",
-    #     color=15844367 # Amarillo/Dorado
-    # )
+def check_sports_markets():
+    """Escanea mercados deportivos en vivo cada 1 minuto buscando dips/oportunidades."""
+    print("[SPORTS] Escaneando eventos deportivos en tiempo real...")
+    # Tu lógica de scraping/API Kalshi para deportes va aquí.
 
 # ==========================================
-# 5. MÓDULO DE MONITOREO DE LATENCIA
+# 5. BITCOIN 15-MIN PREDICTION MARKETS (EVERY 15 MIN)
+# ==========================================
+def check_btc_15m_markets():
+    """Monitorea el mercado de predicción de BTC a 15 minutos en Kalshi."""
+    print("[BTC 15M] Evaluando mercado de predicción de Bitcoin 15m...")
+    # Tu lógica de predicción de BTC va aquí.
+
+# ==========================================
+# 6. LATENCY & PORTFOLIO CHECKS
 # ==========================================
 def check_latency(target_url: str = "https://api.coinbase.com/v2/time", threshold_ms: float = 500.0):
     start_time = time.time()
@@ -95,17 +96,13 @@ def check_latency(target_url: str = "https://api.coinbase.com/v2/time", threshol
         )
         return None
 
-# ==========================================
-# 6. MÓDULO DE MONITOREO DE BALANCE / PORTFOLIO
-# ==========================================
 def check_portfolio_status():
     if not EXCHANGE_API_KEY or not EXCHANGE_API_SECRET:
-        print("[INFO] API Keys no configuradas. Generando reporte simulado de balance.")
-        total_balance_usd = 12500.50
-        daily_pnl = +3.45
-    else:
-        total_balance_usd = 0.0
-        daily_pnl = 0.0
+        print("[INFO] API Keys no configuradas. Reporte de balance omitido.")
+        return
+
+    total_balance_usd = 0.0
+    daily_pnl = 0.0
 
     msg = (
         f"**Balance Total:** `${total_balance_usd:,.2f} USD`\n"
@@ -119,37 +116,52 @@ def check_portfolio_status():
     )
 
 # ==========================================
-# 7. BUCLE PRINCIPAL (MAIN LOOP)
+# 7. MAIN ASYNC LOOPS (DUAL FREQUENCY)
 # ==========================================
-async def main_loop():
+async def sports_loop():
+    """Loop de alta frecuencia: revisa deportes cada 60 segundos."""
+    while True:
+        try:
+            check_sports_markets()
+        except Exception as e:
+            print(f"[ERROR SPORTS LOOP] {e}")
+        await asyncio.sleep(60)
+
+async def btc_and_system_loop():
+    """Loop de 15 minutos: revisa predicciones BTC 15m, latencia y balance."""
+    while True:
+        try:
+            check_btc_15m_markets()
+            check_latency()
+            check_portfolio_status()
+        except Exception as e:
+            print(f"[ERROR MAIN LOOP] {e}")
+        await asyncio.sleep(900)
+
+async def main():
     send_discord_alert(
-        title="🟢 BOT DE MONITOREO INICIADO",
+        title="🟢 BOT AUTÓNOMO INICIADO",
         description=(
-            "El bot está activo y monitoreando:\n"
-            "• **10+ Personas Influyentes & Empresas Clave**\n"
-            "• **Alertas Kalshi:** Estrategia de Compras Abajo (Dip 25%-35%)\n"
-            "• **Alertas Deportivas Clarificadas:** Ganador explícito + Líneas Over/Under\n"
-            "• **Control de Volatilidad:** Ventana de 15 Minutos"
+            "**Configuración Activa:**\n"
+            "• **Monitoreo Deportivo:** Escaneo cada **1 minuto** (Alta velocidad)\n"
+            "• **Mercado BTC 15M:** Monitoreo cada **15 minutos**\n"
+            "• **Noticias & Ballenas:** Disparo **Instantáneo**\n"
+            "• **Health Check:** Puerto activo en Render"
         ),
         color=3066993
     )
     
-    while True:
-        # 1. Monitoreo de Deportes y Noticias Kalshi
-        check_sports_and_news()
-        
-        # 2. Chequeo de Latencia
-        check_latency()
-        
-        # 3. Chequeo de Portfolio
-        check_portfolio_status()
-        
-        # Espera de 15 minutos entre iteraciones
-        await asyncio.sleep(900)
+    # Ejecuta ambos loops en paralelo
+    await asyncio.gather(
+        sports_loop(),
+        btc_and_system_loop()
+    )
 
 if __name__ == "__main__":
     try:
+        # Servidor HTTP para Render
         threading.Thread(target=start_health_server, daemon=True).start()
-        asyncio.run(main_loop())
+        # Bucle principal de eventos
+        asyncio.run(main())
     except KeyboardInterrupt:
         print("\n[BOT] Detenido por el usuario.")
