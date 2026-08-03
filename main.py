@@ -1,18 +1,19 @@
 import asyncio
 import json
 import logging
+import os
 import requests
 import websockets
+from aiohttp import web
 
 # ==========================================
 # CONFIGURACIÓN GENERAL Y APIS
 # ==========================================
-# Discord Webhook integrado
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1533349076593283252/QPKKfcqt0F1I0WcUEnwI5GjVsQTQYL23BvX8F0YM1p4laseCH0iDNPhdfd0VApHafggJ"
 
 # Configuración Trading / Cripto (Coinbase & Kalshi)
 COINBASE_WS_URL = "wss://ws-feed.exchange.coinbase.com"
-WHALE_THRESHOLD_BTC = 5.0  # Detección de movimientos masivos / ballenas (>5 BTC)
+WHALE_THRESHOLD_BTC = 5.0  # Detección de ballenas (>5 BTC)
 
 # Configuración Deportes Multidisciplina
 SPORTS_TO_TRACK = [
@@ -23,14 +24,12 @@ SPORTS_TO_TRACK = [
     "americanfootball_nfl"
 ]
 
-# Configuración de registros / logs
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 # ==========================================
 # MÓDULO DE NOTIFICACIONES A DISCORD
 # ==========================================
 def send_discord_alert(content: str, title: str = "🚨 ALERTA DEL BOT"):
-    """Envía un mensaje formateado a tu canal de Discord."""
     payload = {
         "embeds": [{
             "title": title,
@@ -46,10 +45,28 @@ def send_discord_alert(content: str, title: str = "🚨 ALERTA DEL BOT"):
         logging.error(f"Excepción al conectar con Discord: {e}")
 
 # ==========================================
-# MÓDULO 1: MONITOR DE TRADING (COINBASE & KALSHI)
+# DUMMY WEB SERVER PARA RENDER HEALTH CHECK
+# ==========================================
+async def handle_health_check(request):
+    return web.Response(text="Bot en ejecución 24/7 OK")
+
+async def start_dummy_server():
+    """Inicia un servidor web mínimo para satisfacer el escaneo de puertos de Render."""
+    port = int(os.environ.get("PORT", 8080))
+    app = web.Application()
+    app.router.add_get('/', handle_health_check)
+    app.router.add_get('/health', handle_health_check)
+    
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    logging.info(f"Servidor de Health Check iniciado en el puerto {port}")
+
+# ==========================================
+# MÓDULO 1: MONITOR DE TRADING
 # ==========================================
 async def monitor_coinbase_trading():
-    """Conecta al WebSocket de Coinbase para detectar señales de mercado y ballenas."""
     subscribe_message = {
         "type": "subscribe",
         "product_ids": ["BTC-USD"],
@@ -71,7 +88,6 @@ async def monitor_coinbase_trading():
                         price = float(data.get("price", 0))
                         side = data.get("side")
 
-                        # Filtro de Volatilidad y Detección de Ballenas
                         if size >= WHALE_THRESHOLD_BTC:
                             direction = "🟢 COMPRA (UP)" if side == "buy" else "🔴 VENTA (DOWN)"
                             msg = (
@@ -88,37 +104,21 @@ async def monitor_coinbase_trading():
             await asyncio.sleep(5)
 
 # ==========================================
-# MÓDULO 2: MONITOR DE DEPORTES MULTIDISCIPLINA
+# MÓDULO 2: MONITOR DE DEPORTES
 # ==========================================
 async def monitor_sports_signals():
-    """Módulo para rastrear y generar señales automáticas en deportes."""
     logging.info(f"Módulo de deportes activo para las disciplinas: {', '.join(SPORTS_TO_TRACK)}")
-    
     while True:
         try:
             for sport in SPORTS_TO_TRACK:
                 await process_sport_data(sport)
-                
-            # Intervalo de actualización (por defecto 15 minutos / 900 segundos)
             await asyncio.sleep(900)
         except Exception as e:
             logging.error(f"Error en el módulo de deportes: {e}")
             await asyncio.sleep(60)
 
 async def process_sport_data(sport_key: str):
-    """Procesa datos y cuotas para el deporte especificado."""
-    # Aquí puedes añadir las llamadas API específicas para consultar eventos deportivos
     pass
-
-def send_manual_sports_signal(sport: str, match: str, prediction: str, odds: str):
-    """Permite enviar una señal deportiva específica a Discord."""
-    msg = (
-        f"**Deporte:** {sport.upper()}\n"
-        f"**Partido/Evento:** {match}\n"
-        f"**Pronóstico:** `{prediction}`\n"
-        f"**Cuota/Odds:** `{odds}`"
-    )
-    send_discord_alert(msg, title="⚽🎾🏀 SEÑAL DEPORTIVA")
 
 # ==========================================
 # EJECUCIÓN PRINCIPAL
@@ -126,8 +126,9 @@ def send_manual_sports_signal(sport: str, match: str, prediction: str, odds: str
 async def main():
     logging.info("Iniciando Bot Unificado de Trading y Deportes...")
     
-    # Ejecución simultánea de ambos módulos
+    # Iniciar servidor web para Render + Monitores concurrentes
     await asyncio.gather(
+        start_dummy_server(),
         monitor_coinbase_trading(),
         monitor_sports_signals()
     )
