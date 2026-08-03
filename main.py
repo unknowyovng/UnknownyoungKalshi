@@ -2,6 +2,7 @@ import os
 import time
 import threading
 import requests
+import urllib.parse
 from flask import Flask
 
 # ---------------------------------------------------------
@@ -72,13 +73,12 @@ def calculate_odds(prob_percent):
         
     return decimal_odds, american_str
 
-def analyze_sports_recommendation(title, last_price, market_ticker=""):
+def analyze_sports_recommendation(title, last_price):
     """
     Analiza la especificación de la apuesta y genera recomendación detallada.
     """
     title_lower = title.lower()
     rec_type = "GENERAL"
-    pick = "SÍ" if last_price <= 20 else "NO"
     
     # 1. Béisbol (Carreras / Runs)
     if "runs" in title_lower or "carreras" in title_lower or "mlb" in title_lower:
@@ -98,7 +98,7 @@ def analyze_sports_recommendation(title, last_price, market_ticker=""):
         elif "3.5" in title_lower:
             pick = "BAJO DE 3.5 GOLES" if last_price <= 25 else "MÁS DE 3.5 GOLES"
         else:
-            pick = "Aposta a Cuota Alta en Línea de Goles"
+            pick = "Apostar a Cuota Alta en Línea de Goles"
 
     # 3. Tenis (Sets)
     elif "sets" in title_lower or "tennis" in title_lower or "tenis" in title_lower:
@@ -145,7 +145,6 @@ def scan_kalshi_markets():
         for event in events:
             category = event.get("category", "").upper()
             title = event.get("title", "")
-            event_ticker = event.get("ticker", "")
             markets = event.get("markets", [])
             
             if not markets:
@@ -153,10 +152,10 @@ def scan_kalshi_markets():
 
             market = markets[0]
             last_price = market.get("last_price", 0)
-            market_ticker = market.get("ticker", event_ticker)
             
-            # Enlace directo al mercado específico en Kalshi
-            kalshi_link = f"https://kalshi.com/markets/{event_ticker}"
+            # Corrección de URL de Kalshi usando búsqueda por query para evitar 404
+            encoded_title = urllib.parse.quote(title)
+            kalshi_link = f"https://kalshi.com/markets?query={encoded_title}"
 
             # --- Evaluación Bitcoin 15m y 1h ---
             if "BITCOIN" in title.upper() or "BTC" in title.upper():
@@ -178,7 +177,7 @@ def scan_kalshi_markets():
                 # Detecta anomalías: equipos muy poco favoritos (<= 20%) o hiper-favoritos (>= 80%)
                 if last_price <= 20 or last_price >= 80:
                     dec_odds, amer_odds = calculate_odds(last_price)
-                    rec_category, pick_recommendation = analyze_sports_recommendation(title, last_price, market_ticker)
+                    rec_category, pick_recommendation = analyze_sports_recommendation(title, last_price)
                     
                     details = (
                         f"🏆 **Evento:** {title}\n"
@@ -187,8 +186,8 @@ def scan_kalshi_markets():
                         f"💵 **Cuota Estimada:** `{dec_odds}x` ({amer_odds})\n\n"
                         f"🎯 **RECOMENDACIÓN DE ENTRADA:**\n"
                         f"👉 **Apostar por:** `{pick_recommendation}`\n"
-                        f"💡 *Estrategia:* Entrar con cuota alta y buscar salida en profit cuando la cuota suba al 35-40% en vivo.\n\n"
-                        f"🔗 [Abrir Partido en Kalshi Directamente]({kalshi_link})"
+                        f"💡 *Estrategia:* Entrar a cuota alta y buscar salida con beneficio al subir la cuota (35-40%).\n\n"
+                        f"🔗 [Abrir Mercado en Kalshi Directamente]({kalshi_link})"
                     )
                     send_discord_alert("ANOMALÍA DETECTADA - APUESTA DE VALOR", details, alert_type="SPORTS")
 
