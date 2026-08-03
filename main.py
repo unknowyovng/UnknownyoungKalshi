@@ -1,7 +1,7 @@
 import os
+import time
 import asyncio
 import threading
-from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import aiohttp
 import discord
@@ -152,20 +152,24 @@ async def ciclo_monitoreo():
                     precio_btc = await obtener_precio_btc(session)
 
                     if precio_btc is not None:
-                        ahora = datetime.utcnow()
-                        minuto_bloque = (ahora.minute // 15) * 15
-                        bloque_actual = f"{ahora.hour}:{minuto_bloque:02d}"
+                        # Le sumamos 5 segundos al tiempo actual.
+                        # De esta forma el nuevo bloque se activa a los :14:55, :29:55, :44:55 y :59:55
+                        timestamp_anticipado = int(time.time()) + 5
+                        bloque_actual = timestamp_anticipado // 900
 
-                        # Detectar cambio de bloque de 15m (00, 15, 30, 45) o primer inicio
+                        # Detectar cambio de bloque con 5s de anticipación
                         if ultimo_bloque_15m != bloque_actual or target_kalshi_auto is None:
+                            # 1. Asignar el precio spot en vivo inmediatamente
+                            target_kalshi_auto = precio_btc
+                            
+                            # 2. Si Coinbase ya tiene la vela, ajustarla
                             target_vela = await obtener_price_to_beat_kalshi(session)
-                            
-                            # Si la API de velas aún no cargó el Open, usar el precio spot en vivo del instante
-                            target_kalshi_auto = target_vela if target_vela else precio_btc
-                            
+                            if target_vela:
+                                target_kalshi_auto = target_vela
+
                             ultimo_bloque_15m = bloque_actual
                             ultima_senal_enviada = None  # Resetear alertas para el nuevo bloque
-                            print(f"🔄 [NUEVO BLOQUE {bloque_actual} UTC] Target Auto fijado en: ${target_kalshi_auto:,.2f}")
+                            print(f"⚡ [NUEVO BLOQUE DETECTADO - 5s ANTICIPACIÓN] Target Fijado: ${target_kalshi_auto:,.2f}")
 
                         target_activo = manual_target if modo_manual and manual_target else target_kalshi_auto
 
