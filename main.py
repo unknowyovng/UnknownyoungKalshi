@@ -20,7 +20,7 @@ def obtener_hora_local():
     return datetime.now(ZONA_HORARIA_LOCAL)
 
 # ==========================================
-# 1. SERVIDOR WEB KEEPALIVE (Para UptimeRobot / Render 24/7)
+# 1. SERVIDOR KEEPALIVE 24/7 (Para UptimeRobot / Render)
 # ==========================================
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -40,7 +40,7 @@ def run_health_server():
 threading.Thread(target=run_health_server, daemon=True).start()
 
 # ==========================================
-# 2. BASE DE DATOS Y MEMORIA HISTÓRICA
+# 2. BASE DE DATOS Y MEMORIA DE HISTORIAL (OHLC)
 # ==========================================
 DB_FILE = "btc_memory.db"
 
@@ -94,7 +94,7 @@ def obtener_promedio_rango_horario():
 init_db()
 
 # ==========================================
-# 3. DISCORD BOT & ESTADO EN TIEMPO REAL
+# 3. DISCORD BOT & ESTADO DE MERCADO
 # ==========================================
 intents = discord.Intents.default()
 intents.message_content = True
@@ -103,6 +103,10 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 precio_actual_global = 0.0
 UMBRAL_BALLENA_BTC = 5.0
 
+# Tracking de Racha de 15m
+racha_actual = {"direccion": None, "contador": 0, "ultimo_precio": None}
+
+# Tracking de Vela Horaria (OHLC)
 vela_actual = {
     "hour_timestamp": None,
     "open": 0.0,
@@ -132,7 +136,7 @@ def actualizar_tracking_vela(price):
     actualizar_vela_hora_db(hour_ts, vela_actual["open"], vela_actual["high"], vela_actual["low"], vela_actual["close"])
 
 # ==========================================
-# 4. CÁLCULO DE PROYECCIÓN Y STRIKES KALSHI
+# 4. LÓGICA DE PROYECCIÓN KALSHI
 # ==========================================
 def calcular_prediccion_kalshi(precio_actual):
     base_100 = round(precio_actual / 100) * 100
@@ -195,7 +199,7 @@ async def rastreador_ballenas():
         try:
             async with websockets.connect(url) as ws:
                 await ws.send(json.dumps(suscribir_msg))
-                print("🐋 Rastreando mercado y ballenas 24/7...")
+                print("🐋 Rastreando órdenes de ballenas y precios en vivo...")
                 
                 async for mensaje in ws:
                     data = json.loads(mensaje)
@@ -214,11 +218,11 @@ async def rastreador_ballenas():
                                 recs = calcular_prediccion_kalshi(price)
                                 color = discord.Color.green() if side == "buy" else discord.Color.red()
                                 
-                                embed = discord.Embed(title="🐋 ALERTA INSTANTÁNEA DE BALLENA", color=color)
-                                embed.add_field(name="Volumen Detectado", value=f"**{size:.2f} BTC** (~${monto_usd:,.2f} USD)", inline=False)
+                                embed = discord.Embed(title="🐋 ¡IMPACTO DE BALLENA EN EL PRECIO!", color=color)
+                                embed.add_field(name="Orden Ejecutada", value=f"**{size:.2f} BTC** (~${monto_usd:,.2f} USD)", inline=False)
                                 embed.add_field(name="Precio BTC", value=f"${price:,.2f}", inline=True)
                                 embed.add_field(name="Señal Kalshi", value=recs["target_principal"], inline=False)
-                                embed.add_field(name="Opción Balanceada", value=recs["strike_balanceado"], inline=False)
+                                embed.add_field(name="Opción Recomendada", value=recs["strike_balanceado"], inline=False)
                                 
                                 await canal.send(embed=embed)
 
@@ -227,23 +231,83 @@ async def rastreador_ballenas():
             await asyncio.sleep(5)
 
 # ==========================================
-# 6. ALERTAS AUTOMÁTICAS CADA 5 MINUTOS
+# 6. CICLO DE SEGUIMIENTO DE RACHAS DE 15 MINUTOS
+# ==========================================
+async def ciclo_rachas_15m():
+    await bot.wait_until_ready()
+    global precio_actual_global, racha_actual
+    
+    canal = discord.utils.get(bot.get_all_channels(), name="alertas-kalshi")
+    ultimo_bloque_15m = None
+
+    while not bot.is_closed():
+        try:
+            if canal and precio_actual_global > 0:
+                ahora = obtener_hora_local()
+                bloque_15m = (ahora.hour, ahora.minute // 15)
+
+                if ultimo_bloque_15m != bloque_15m:
+                    ultimo_bloque_15m = bloque_15m
+                    precio_cierre = precio_actual_global
+                    
+                    if racha_actual["ultimo_precio"] is not None:
+                        if precio_cierre > racha_actual["ultimo_precio"]:
+                            direccion_bloque = "ALCISTA 🟢"
+                        else:
+                            direccion_bloque = "BAJISTA 🔴"
+                            
+                        if racha_actual["direccion"] == direccion_bloque:
+                            racha_actual["contador"] += 1
+                        else:
+                            racha_actual["direccion"] = direccion_bloque
+                            racha_actual["contador"] = 1
+
+                        color = discord.Color.green() if "ALCISTA" in direccion_bloque else discord.Color.red()
+                        
+                        embed = discord.Embed(
+                            title=f"🔥 CONFIRMACIÓN DE RACHA 15M ({ahora.strftime('%I:%M %p')})",
+                            description=f"Cierre de bloque 15m: **{direccion_bloque}**",
+                            color=color
+                        )
+                        embed.add_field(name="Racha Acumulada", value=f"**{racha_actual['contador']} cierres seguidos** en dirección {racha_actual['direccion']}", inline=False)
+                        embed.add_field(name="Precio Cierre 15m", value=f"${precio_cierre:,.2f}", inline=True)
+                        
+                        if racha_actual["contador"] >= 2:
+                            embed.add_field(
+                                name="⚡ SEÑAL DE TENDENCIA CONFIRMADA", 
+                                value=f"Súmate a la tendencia **{racha_actual['direccion']}**.\n🎯 **Estrategia Kalshi:** Entra entre el Minuto 1 al 4 buscando contratos entre **30% - 35%** (Cuota > x2.4).", 
+                                inline=False
+                            )
+                        else:
+                            embed.add_field(name="ℹ️ Estado", value="Cambio de dirección detectado. Evaluando inicio de nueva racha...", inline=False)
+
+                        await canal.send(embed=embed)
+                    
+                    racha_actual["ultimo_precio"] = precio_cierre
+
+        except Exception as e:
+            print(f"⚠️ Error en ciclo 15M: {e}")
+
+        await asyncio.sleep(3)
+
+# ==========================================
+# 7. PROYECCIÓN AUTOMÁTICA CADA 5 MINUTOS (1H)
 # ==========================================
 async def ciclo_monitoreo_5m():
     await bot.wait_until_ready()
     global precio_actual_global
     
     canal = discord.utils.get(bot.get_all_channels(), name="alertas-kalshi")
-    ultimo_bloque = None
+    ultimo_bloque_5m = None
 
     while not bot.is_closed():
         try:
             if canal and precio_actual_global > 0:
                 ahora = obtener_hora_local()
-                bloque_actual = (ahora.hour, ahora.minute // 5)
+                bloque_actual_5m = (ahora.hour, ahora.minute // 5)
 
-                if ultimo_bloque != bloque_actual:
-                    ultimo_bloque = bloque_actual
+                if ultimo_bloque_5m != bloque_actual_5m:
+                    ultimo_bloque_5m = bloque_actual_5m
                     
                     minutos_restantes = 60 - ahora.minute if ahora.minute != 0 else 60
                     timestamp_cierre = ahora.timestamp() + (minutos_restantes * 60)
@@ -254,7 +318,7 @@ async def ciclo_monitoreo_5m():
 
                     embed = discord.Embed(
                         title=f"⏳ PROYECCIÓN VELA 1H (FALTAN {minutos_restantes} MIN)",
-                        description=f"Objetivo Cierre: **{hora_cierre_str}** | Precio BTC: **${precio_actual_global:,.2f}**",
+                        description=f"Objetivo Cierre: **{hora_cierre_str}** | BTC: **${precio_actual_global:,.2f}**",
                         color=discord.Color.blue()
                     )
                     
@@ -273,8 +337,23 @@ async def ciclo_monitoreo_5m():
         await asyncio.sleep(3)
 
 # ==========================================
-# 7. COMANDOS MANUALES
+# 8. COMANDOS MANUALES DISCORD
 # ==========================================
+@bot.command(name="racha", aliases=["tendencia"])
+async def ver_racha(ctx):
+    if racha_actual["direccion"] is None:
+        await ctx.send("⏳ Esperando el primer cierre de 15 minutos para empezar a contar la racha...")
+        return
+        
+    embed = discord.Embed(
+        title="📊 RACHA ACTUAL DE 15 MINUTOS",
+        color=discord.Color.purple()
+    )
+    embed.add_field(name="Dirección Dominante", value=racha_actual["direccion"], inline=True)
+    embed.add_field(name="Bloques Seguidos", value=f"**{racha_actual['contador']}**", inline=True)
+    embed.add_field(name="Último Precio Registrado", value=f"${racha_actual['ultimo_precio']:,.2f}", inline=False)
+    await ctx.send(embed=embed)
+
 @bot.command(name="proyeccion", aliases=["hora", "cierre"])
 async def proyeccion_manual(ctx):
     precio = precio_actual_global if precio_actual_global > 0 else 63000.0
@@ -293,11 +372,15 @@ async def proyeccion_manual(ctx):
     embed.add_field(name="🟡 Opción Balanceada", value=recs["strike_balanceado"], inline=False)
     await ctx.send(embed=embed)
 
+# ==========================================
+# 9. INICIALIZACIÓN DE TAREAS Y BOT
+# ==========================================
 @bot.event
 async def on_ready():
-    print(f"✅ Bot listo y operativo como {bot.user.name}")
+    print(f"✅ Bot listo y operativo 24/7 como {bot.user.name}")
     bot.loop.create_task(rastreador_ballenas())
     bot.loop.create_task(ciclo_monitoreo_5m())
+    bot.loop.create_task(ciclo_rachas_15m())
 
 async def main():
     token = os.environ.get("DISCORD_BOT_TOKEN")
