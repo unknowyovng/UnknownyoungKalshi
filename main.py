@@ -31,7 +31,7 @@ def run_dummy_server():
 threading.Thread(target=run_dummy_server, daemon=True).start()
 
 # ==========================================
-# 2. BASE DE DATOS LOCAL (MEMORIA)
+# 2. BASE DE DATOS LOCAL
 # ==========================================
 DB_FILE = "btc_memory.db"
 
@@ -91,36 +91,54 @@ modo_manual = False
 target_kalshi_auto = None
 precio_actual_global = 0.0
 
-# Deque para guardar los últimos 60 precios (1 precio por segundo aprox)
 historial_corto = deque(maxlen=60)
-
-# Umbral de Ballenas (en BTC)
-UMBRAL_BALLENA_BTC = 5.0  # Detecta órdenes >= 5 BTC (~$300k+)
-
-# PARÁMETROS PARA SCALPING RÁPIDO (1H)
-IMPULSO_RAPIDO_USD = 18.0       # Cambio rápido de $18+ activa señal de micro-entrada
-TAKE_PROFIT_SCALP_USD = 15.0    # Objetivo de ganancia rápida para salir
-STOP_LOSS_SCALP_USD = 20.0      # Stop loss para micro-operaciones
-COOLDOWN_SCALPING = 45          # 45 segundos entre entradas rápidas
-
-posicion_actual = None          # Guarda si estamos en "BUY" o "SELL"
-precio_entrada_posicion = 0.0
-ultimo_envio_scalp = 0
+UMBRAL_BALLENA_BTC = 5.0
+INVERSION_FIX_USD = 10.0  # Inversión exacta de $10 USD
 
 # ==========================================
-# 4. FUNCIONES DE CÁLCULO DE RANGOS
+# 4. LÓGICA DE ESTIMACIÓN KALSHI (STRIKES 100 IN 100)
 # ==========================================
-def calcular_niveles_kalshi(precio_actual):
+def calcular_prediccion_kalshi(precio_actual):
+    """Calcula el target exacto de cierre (Arriba de X o Abajo de Y)"""
     base_100 = round(precio_actual / 100) * 100
-    techos = [base_100 + (100 * i) for i in range(1, 5)]
-    if techos[0] <= precio_actual:
-        techos = [t + 100 for t in techos]
+    
+    # Calcular tendencia reciente (último minuto)
+    if len(historial_corto) >= 10:
+        momentum = precio_actual - historial_corto[0]
+    else:
+        momentum = 0.0
+
+    # Estimación de sesgo alcista o bajista
+    if momentum >= 0:
+        direccion = "ARRIBA (UP / YES)"
+        # Niveles superiores para Kalshi ($63,500 / $63,600 / $63,700, etc.)
+        strike_principal = base_100 if base_100 > precio_actual else base_100 + 100
+        strike_seguro = strike_principal - 100
+        strike_agresivo = strike_principal + 100
         
-    pisos = [base_100 - (100 * i) for i in range(1, 5)]
-    if pisos[0] >= precio_actual:
-        pisos = [p - 100 for p in pisos]
+        recomendaciones = {
+            "direccion": direccion,
+            "target_principal": f"BTC estará **POR ENCIMA DE ${strike_principal:,.0f}**",
+            "strike_seguro": f"Arriba de ${strike_seguro:,.0f} (Costo ~$0.68) ➔ Ganancia: +$4.70 USD con $10",
+            "strike_balanceado": f"Arriba de ${strike_principal:,.0f} (Costo ~$0.45) ➔ Ganancia: +$12.20 USD con $10",
+            "strike_agresivo": f"Arriba de ${strike_agresivo:,.0f} (Costo ~$0.25) ➔ Ganancia: +$30.00 USD con $10"
+        }
+    else:
+        direccion = "ABAJO (DOWN / NO)"
+        # Niveles inferiores para Kalshi ($64,000 / $63,900 / $63,800, etc.)
+        strike_principal = base_100 if base_100 < precio_actual else base_100 - 100
+        strike_seguro = strike_principal + 100
+        strike_agresivo = strike_principal - 100
         
-    return techos, pisos
+        recomendaciones = {
+            "direccion": direccion,
+            "target_principal": f"BTC estará **POR DEBAJO DE ${strike_seguro:,.0f}**",
+            "strike_seguro": f"Abajo de ${strike_seguro:,.0f} (Costo ~$0.68) ➔ Ganancia: +$4.70 USD con $10",
+            "strike_balanceado": f"Abajo de ${strike_principal:,.0f} (Costo ~$0.45) ➔ Ganancia: +$12.20 USD con $10",
+            "strike_agresivo": f"Abajo de ${strike_agresivo:,.0f} (Costo ~$0.25) ➔ Ganancia: +$30.00 USD con $10"
+        }
+        
+    return recomendaciones
 
 # ==========================================
 # 5. WEBSOCKET DE DETECCIÓN DE BALLENAS
@@ -147,7 +165,7 @@ async def rastreador_ballenas():
                     if data.get("type") == "match":
                         size = float(data.get("size", 0))
                         price = float(data.get("price", 0))
-                        side = data.get("side")  # "buy" o "sell"
+                        side = data.get("side")
                         
                         precio_actual_global = price
                         historial_corto.append(price)
@@ -156,24 +174,16 @@ async def rastreador_ballenas():
                             canal = discord.utils.get(bot.get_all_channels(), name="alertas-kalshi")
                             if canal:
                                 monto_usd = size * price
-                                techos, pisos = calcular_niveles_kalshi(price)
+                                recs = calcular_prediccion_kalshi(price)
                                 
-                                if side == "buy":
-                                    color = discord.Color.green()
-                                    titulo = "🐋 ¡COMPRA MASIVA DE BALLENA DETECTADA!"
-                                    direccion = "📈 **IMPULSO ALCISTA PROBABLE**"
-                                    sugerencia = f"Considera posiciones **YES / UP**. Objetivos inmediatos: **${techos[0]:,.0f}** o **${techos[1]:,.0f}**"
-                                else:
-                                    color = discord.Color.red()
-                                    titulo = "🐋 ¡VENTA MASIVA DE BALLENA DETECTADA!"
-                                    direccion = "📉 **PRESIÓN BAJISTA PROBABLE**"
-                                    sugerencia = f"Considera posiciones **NO / DOWN** o salidas rápidas. Soportes: **${pisos[0]:,.0f}** o **${pisos[1]:,.0f}**"
-
+                                color = discord.Color.green() if side == "buy" else discord.Color.red()
+                                titulo = "🐋 ¡IMPACTO DE BALLENA EN EL PRECIO!"
+                                
                                 embed = discord.Embed(title=titulo, color=color)
-                                embed.add_field(name="Volumen Ejecutado", value=f"**{size:.2f} BTC** (~${monto_usd:,.2f} USD)", inline=False)
-                                embed.add_field(name="Precio de Ejecución", value=f"${price:,.2f}", inline=True)
-                                embed.add_field(name="Sesgo de Mercado", value=direccion, inline=True)
-                                embed.add_field(name="🎯 Recomendación Kalshi", value=sugerencia, inline=False)
+                                embed.add_field(name="Orden Ejecutada", value=f"**{size:.2f} BTC** (~${monto_usd:,.2f} USD)", inline=False)
+                                embed.add_field(name="Precio BTC", value=f"${price:,.2f}", inline=True)
+                                embed.add_field(name="🎯 Recomendación $10 USD", value=recs["target_principal"], inline=False)
+                                embed.add_field(name="Opción Balanceada", value=recs["strike_balanceado"], inline=False)
                                 
                                 await canal.send(embed=embed)
 
@@ -182,47 +192,53 @@ async def rastreador_ballenas():
             await asyncio.sleep(5)
 
 # ==========================================
-# 6. COMANDOS DISCORD (CORREGIDOS)
+# 6. COMANDOS DISCORD (PROYECCIÓN A LAS :00)
 # ==========================================
+@bot.command(name="proyeccion", aliases=["hora", "cierre", "target"])
+async def estimar_cierre_hora(ctx):
+    """Muestra el Strike recomendado para el cierre de la hora actual con $10 USD"""
+    precio = precio_actual_global if precio_actual_global > 0 else 63000.0
+    
+    minuto_actual = time.strftime("%M")
+    minutos_restantes = 60 - int(minuto_actual)
+    proxima_hora = (int(time.strftime("%I")) % 12) + 1
+    ampm = time.strftime("%p")
+    
+    recs = calcular_prediccion_kalshi(precio)
+    
+    embed = discord.Embed(
+        title=f"⏳ PREPARACIÓN CIERRE DE VELA ({proxima_hora}:00 {ampm})",
+        description=f"Faltan **{minutos_restantes} minutos** para el cierre a las **{proxima_hora}:00 {ampm}**.\nInversión: **$10 USD**",
+        color=discord.Color.gold()
+    )
+    
+    embed.add_field(name="Precio BTC Actual", value=f"**${precio:,.2f}**", inline=True)
+    embed.add_field(name="Predicción Principal Kalshi", value=f"🎯 {recs['target_principal']}", inline=False)
+    
+    embed.add_field(name="🟢 Opción Segura (Bajo Riesgo)", value=recs["strike_seguro"], inline=False)
+    embed.add_field(name="🟡 Opción Recomendada (Rendimiento Medio)", value=recs["strike_balanceado"], inline=False)
+    embed.add_field(name="🔴 Opción Agresiva (Alto Rendimiento)", value=recs["strike_agresivo"], inline=False)
+    
+    await ctx.send(embed=embed)
+
 @bot.command(name="rangos", aliases=["niveles"])
 async def estimar_rangos(ctx):
     precio = precio_actual_global if precio_actual_global > 0 else 63000.0
-    techos, pisos = calcular_niveles_kalshi(precio)
+    base_100 = round(precio / 100) * 100
     
     embed = discord.Embed(
-        title="🎯 ESTIMACIÓN DE RANGOS / STRIKES PARA KALSHI",
-        description=f"Precio Actual de BTC: **${precio:,.2f}**",
+        title="🎯 STRIKES DISPONIBLES EN KALSHI",
+        description=f"Precio BTC Actual: **${precio:,.2f}**",
         color=discord.Color.purple()
     )
     
-    text_techos = "".join([f"• **${t:,.0f}** (+${t - precio:,.2f})\n" for t in techos])
-    embed.add_field(name="📈 Techos Estimados (Resistencias)", value=text_techos, inline=False)
-
-    text_pisos = "".join([f"• **${p:,.0f}** (-${precio - p:,.2f})\n" for p in pisos])
-    embed.add_field(name="📉 Pisos Estimados (Soportes)", value=text_pisos, inline=False)
+    techos = [f"• BTC **Arriba de ${base_100 + (100 * i):,.0f}**" for i in range(1, 4)]
+    pisos = [f"• BTC **Debajo de ${base_100 - (100 * i):,.0f}**" for i in range(0, 3)]
+    
+    embed.add_field(name="📈 Contratos UP / YES", value="\n".join(techos), inline=False)
+    embed.add_field(name="📉 Contratos DOWN / NO", value="\n".join(pisos), inline=False)
 
     await ctx.send(embed=embed)
-
-@bot.command(name="target")
-async def set_target(ctx, valor: str = None):
-    global manual_target, modo_manual
-    if valor is None:
-        estado = f"🎯 Target Manual: ${manual_target:,.2f}" if modo_manual else "🤖 Modo: AUTOMÁTICO"
-        await ctx.send(f"ℹ️ {estado}")
-        return
-
-    if valor.lower() in ["auto", "reset"]:
-        modo_manual = False
-        manual_target = None
-        await ctx.send("🤖 **Target restablecido a AUTOMÁTICO.**")
-    else:
-        try:
-            precio = float(valor.replace(",", "").replace("$", ""))
-            manual_target = precio
-            modo_manual = True
-            await ctx.send(f"🎯 **Target fijado en:** `${manual_target:,.2f}`")
-        except ValueError:
-            await ctx.send("❌ Formato incorrecto. Ejemplo: `!target 63142` ")
 
 @bot.command(name="memoria", aliases=["stats"])
 async def ver_memoria(ctx):
@@ -243,12 +259,11 @@ async def on_message(message):
     await bot.process_commands(message)
 
 # ==========================================
-# 7. CICLO DE MONITOREO PRINCIPAL Y SCALPING
+# 7. CICLO PRINCIPAL DE ALERTAS CADA HORA (:00)
 # ==========================================
 async def ciclo_monitoreo():
     await bot.wait_until_ready()
-    global manual_target, modo_manual, target_kalshi_auto, precio_actual_global
-    global posicion_actual, precio_entrada_posicion, ultimo_envio_scalp
+    global precio_actual_global
     
     canal = discord.utils.get(bot.get_all_channels(), name="alertas-kalshi")
     ultimo_bloque_1h = None
@@ -264,91 +279,29 @@ async def ciclo_monitoreo():
                     guardar_precio_db(timestamp_int, precio_btc)
                     bloque_actual_1h = (timestamp_int + 2) // 3600
 
-                    if ultimo_bloque_1h != bloque_actual_1h or target_kalshi_auto is None:
-                        target_kalshi_auto = precio_btc
+                    # ----------------------------------------------------
+                    # ALERTA AUTOMÁTICA AL CAMBIAR LA HORA (10:00, 11:00, 12:00)
+                    # ----------------------------------------------------
+                    if ultimo_bloque_1h != bloque_actual_1h:
                         ultimo_bloque_1h = bloque_actual_1h
-                        posicion_actual = None
+                        proxima_hora = (int(time.strftime("%I")) % 12) + 1
+                        ampm = time.strftime("%p")
 
-                    # ----------------------------------------------------
-                    # A. LÓGICA DE GESTIÓN DE POSICIÓN ABIERTA (TAKE PROFIT / STOP LOSS)
-                    # ----------------------------------------------------
-                    if posicion_actual == "BUY":
-                        ganancia = precio_btc - precio_entrada_posicion
+                        recs = calcular_prediccion_kalshi(precio_btc)
+
+                        embed = discord.Embed(
+                            title=f"🚨 RECOMENDACIÓN DE ENTRADA KALSHI ($10 USD) - CIERRE {proxima_hora}:00 {ampm}",
+                            description=f"Precio Apertura de la Hora: **${precio_btc:,.2f}**\nOperación recomendada para cerrar a las **{proxima_hora}:00 {ampm}**",
+                            color=discord.Color.teal()
+                        )
                         
-                        # TAKE PROFIT
-                        if ganancia >= TAKE_PROFIT_SCALP_USD:
-                            embed = discord.Embed(title="💰 TAKE PROFIT - CERRAR GANANCIA (BUY)", color=discord.Color.gold())
-                            embed.add_field(name="Acción", value="✅ **VENDER / CERRAR POSICIÓN AHORA**", inline=False)
-                            embed.add_field(name="Ganancia Aproximada", value=f"+${ganancia:,.2f} USD", inline=True)
-                            embed.add_field(name="Precio Actual", value=f"${precio_btc:,.2f}", inline=True)
-                            await canal.send(embed=embed)
-                            posicion_actual = None
-                            
-                        # STOP LOSS
-                        elif ganancia <= -STOP_LOSS_SCALP_USD:
-                            embed = discord.Embed(title="🛑 STOP LOSS - CERRAR SCALP (BUY)", color=discord.Color.red())
-                            embed.add_field(name="Acción", value="🚨 **SALIR DE LA POSICIÓN**", inline=False)
-                            embed.add_field(name="Pérdida", value=f"-${abs(ganancia):,.2f} USD", inline=True)
-                            embed.add_field(name="Precio Actual", value=f"${precio_btc:,.2f}", inline=True)
-                            await canal.send(embed=embed)
-                            posicion_actual = None
-
-                    elif posicion_actual == "SELL":
-                        ganancia = precio_entrada_posicion - precio_btc
+                        embed.add_field(name="🎯 Predicción Principal", value=recs["target_principal"], inline=False)
+                        embed.add_field(name="🟢 Opción Segura", value=recs["strike_seguro"], inline=False)
+                        embed.add_field(name="🟡 Opción Balanceada", value=recs["strike_balanceado"], inline=False)
+                        embed.add_field(name="🔴 Opción Agresiva", value=recs["strike_agresivo"], inline=False)
+                        embed.set_footer(text="Usa !proyeccion en cualquier momento de la hora para actualizar el Target.")
                         
-                        # TAKE PROFIT
-                        if ganancia >= TAKE_PROFIT_SCALP_USD:
-                            embed = discord.Embed(title="💰 TAKE PROFIT - CERRAR GANANCIA (SELL)", color=discord.Color.gold())
-                            embed.add_field(name="Acción", value="✅ **VENDER / CERRAR POSICIÓN AHORA**", inline=False)
-                            embed.add_field(name="Ganancia Aproximada", value=f"+${ganancia:,.2f} USD", inline=True)
-                            embed.add_field(name="Precio Actual", value=f"${precio_btc:,.2f}", inline=True)
-                            await canal.send(embed=embed)
-                            posicion_actual = None
-                            
-                        # STOP LOSS
-                        elif ganancia <= -STOP_LOSS_SCALP_USD:
-                            embed = discord.Embed(title="🛑 STOP LOSS - CERRAR SCALP (SELL)", color=discord.Color.red())
-                            embed.add_field(name="Acción", value="🚨 **SALIR DE LA POSICIÓN**", inline=False)
-                            embed.add_field(name="Pérdida", value=f"-${abs(ganancia):,.2f} USD", inline=True)
-                            embed.add_field(name="Precio Actual", value=f"${precio_btc:,.2f}", inline=True)
-                            await canal.send(embed=embed)
-                            posicion_actual = None
-
-                    # ----------------------------------------------------
-                    # B. LÓGICA DE BÚSQUEDA DE NUEVAS ENTRADAS (SCALPING)
-                    # ----------------------------------------------------
-                    elif posicion_actual is None and len(historial_corto) >= 15:
-                        precio_hace_30s = historial_corto[0]
-                        variacion = precio_btc - precio_hace_30s
-
-                        if (tiempo_actual - ultimo_envio_scalp) >= COOLDOWN_SCALPING:
-                            techos, pisos = calcular_niveles_kalshi(precio_btc)
-
-                            # NUEVA ENTRADA EN COMPRA (UP)
-                            if variacion >= IMPULSO_RAPIDO_USD:
-                                posicion_actual = "BUY"
-                                precio_entrada_posicion = precio_btc
-                                ultimo_envio_scalp = tiempo_actual
-
-                                embed = discord.Embed(title="⚡ SEÑAL DE SCALPING RÁPIDO (COMPRA UP)", color=discord.Color.green())
-                                embed.add_field(name="Acción Sugerida", value="🟢 **COMPRAR YES / UP**", inline=False)
-                                embed.add_field(name="Precio Entrada", value=f"${precio_btc:,.2f}", inline=True)
-                                embed.add_field(name="Impulso Detectado", value=f"+${variacion:,.2f} en 30s", inline=True)
-                                embed.add_field(name="🎯 Target Rápido Kalshi", value=f"Objetivo de salida: **${precio_btc + TAKE_PROFIT_SCALP_USD:,.2f}** (o Strike **${techos[0]:,.0f}**)", inline=False)
-                                await canal.send(embed=embed)
-
-                            # NUEVA ENTRADA EN VENTA (DOWN)
-                            elif variacion <= -IMPULSO_RAPIDO_USD:
-                                posicion_actual = "SELL"
-                                precio_entrada_posicion = precio_btc
-                                ultimo_envio_scalp = tiempo_actual
-
-                                embed = discord.Embed(title="⚡ SEÑAL DE SCALPING RÁPIDO (VENTA DOWN)", color=discord.Color.red())
-                                embed.add_field(name="Acción Sugerida", value="🔴 **COMPRAR NO / DOWN**", inline=False)
-                                embed.add_field(name="Precio Entrada", value=f"${precio_btc:,.2f}", inline=True)
-                                embed.add_field(name="Caída Detectada", value=f"-${abs(variacion):,.2f} en 30s", inline=True)
-                                embed.add_field(name="🎯 Target Rápido Kalshi", value=f"Objetivo de salida: **${precio_btc - TAKE_PROFIT_SCALP_USD:,.2f}** (o Piso **${pisos[0]:,.0f}**)", inline=False)
-                                await canal.send(embed=embed)
+                        await canal.send(embed=embed)
 
             except Exception as e:
                 print(f"⚠️ Error en monitoreo: {e}")
