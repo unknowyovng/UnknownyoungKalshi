@@ -120,30 +120,27 @@ def analyze_sports_recommendation(title, last_price):
 
     return rec_type, pick
 
-# ---------------------------------------------------------
-# 4. MONITOREO DE MERCADOS PÚBLICOS KALSHI
-# ---------------------------------------------------------
-KALSHI_API_URL = "https://api.elections.kalshi.com/v1/events"
-
 def is_within_one_week(date_string):
     """
     Verifica si una fecha en formato ISO/string está dentro de los próximos 7 días.
     """
     if not date_string:
-        return True # Si no hay fecha, procesa por defecto
+        return True
     try:
-        # Formato ISO tipico de APIs (ej. 2026-08-10T20:00:00Z)
         clean_date = date_string.replace("Z", "+00:00")
         event_date = datetime.fromisoformat(clean_date)
         
         now = datetime.now(timezone.utc)
         one_week_later = now + timedelta(days=7)
         
-        # Debe ser a futuro pero dentro del límite de 7 días
         return now <= event_date <= one_week_later
-    except Exception as e:
-        # Si falla el parseo de la fecha, dejamos pasar por seguridad
+    except Exception:
         return True
+
+# ---------------------------------------------------------
+# 4. MONITOREO DE MERCADOS PÚBLICOS KALSHI
+# ---------------------------------------------------------
+KALSHI_API_URL = "https://api.elections.kalshi.com/v1/events"
 
 def scan_kalshi_markets():
     """
@@ -165,6 +162,7 @@ def scan_kalshi_markets():
         for event in events:
             category = event.get("category", "").upper()
             title = event.get("title", "")
+            series_ticker = event.get("series_ticker", "")
             event_ticker = event.get("event_ticker", "")
             markets = event.get("markets", [])
             
@@ -175,15 +173,18 @@ def scan_kalshi_markets():
             last_price = market.get("last_price", 0)
 
             # --- FILTRO TEMPORAL (MÁXIMO 7 DÍAS) ---
-            # Revisa la fecha de expiración o cierre del mercado
             expiration_time = market.get("expiration_time") or market.get("close_time") or event.get("mutually_exclusive_expiration_date")
             if expiration_time and not is_within_one_week(expiration_time):
                 print(f"⏭️ Ignorando mercado a largo plazo (>7 días): {title}")
                 continue
 
-            # Redirección a la búsqueda oficial de Kalshi por Ticker/Query
-            search_query = urllib.parse.quote(event_ticker if event_ticker else title)
-            kalshi_link = f"https://kalshi.com/markets?query={search_query}"
+            # --- ESTRUCTURA DE URL CORREGIDA ---
+            # Kalshi estructurar sus páginas usando series_ticker o event_ticker en minúsculas
+            ticker_slug = series_ticker.lower() if series_ticker else event_ticker.lower()
+            if ticker_slug:
+                kalshi_link = f"https://kalshi.com/markets/{ticker_slug}"
+            else:
+                kalshi_link = "https://kalshi.com/markets"
 
             # --- Evaluación Bitcoin 15m y 1h ---
             if "BITCOIN" in title.upper() or "BTC" in title.upper():
