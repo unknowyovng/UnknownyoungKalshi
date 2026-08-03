@@ -66,7 +66,7 @@ def send_discord_notification(title, description, color=0x3498db):
             "title": title,
             "description": description,
             "color": color,
-            "footer": {"text": "Bot de Monitoreo de Mercado & Noticias / Kalshi"}
+            "footer": {"text": "Bot de Monitoreo de Mercado & Kalshi"}
         }]
     }
     try:
@@ -105,7 +105,6 @@ def check_volatility():
 def process_market_event(source, author, content):
     sentiment, color = analyze_sentiment(content)
     
-    # Detectar personas y empresas relevantes
     found_people = [p for p in INFLUENTIAL_PEOPLE if p.lower() in content.lower() or p.lower() in author.lower()]
     found_companies = [c for c in INFLUENTIAL_COMPANIES if c.lower() in content.lower() or c.lower() in author.lower()]
     
@@ -126,20 +125,49 @@ def process_market_event(source, author, content):
     send_discord_notification(f"🚨 Señal Detectada - {sentiment}", body, color)
 
 # ==========================================
-# 5. MÓDULO DE PRONÓSTICOS DEPORTIVOS Y KALSHI
+# 5. MÓDULO KALSHI: ESTRATEGIA DE REVERSIÓN / ENTRADA ABAJO
+# ==========================================
+def evaluate_kalshi_dip_entry(market_ticker, trend_direction, current_prob, minutes_into_candle):
+    """
+    Detecta si el mercado en Kalshi retrocedió temporalmente en los primeros 1-3 minutos
+    generando una probabilidad baja (25% - 35%) a favor de la tendencia principal (30 min).
+    """
+    # 1. Comprobar que estemos en los primeros minutos del contrato (1 a 3 min)
+    if minutes_into_candle <= 3:
+        # 2. Verificar si la probabilidad cayó al rango de descuento (25% - 35%)
+        if 25 <= current_prob <= 35:
+            action = "COMPRAR SI" if trend_direction == "ALCISTA" else "COMPRAR NO"
+            potential_roi = round(((100 - current_prob) / current_prob) * 100, 1)
+
+            title = f"💎 OPORTUNIDAD ENTRADA ABAJO ({trend_direction})"
+            description = (
+                f"**Mercado:** `{market_ticker}`\n"
+                f"**Tendencia General (30m):** {trend_direction} 📈\n"
+                f"**Minuto del Contrato:** Minuto {minutes_into_candle}\n"
+                f"**Probabilidad Actual:** `{current_prob}%` (Descuento detectado)\n"
+                f"**Acción Recomendada:** `{action}`\n"
+                f"**Margen / ROI Potencial:** ~{potential_roi}%\n\n"
+                f"💡 *El mercado retrocedió en el inicio de la vela. Gran oportunidad de entrada a favor de la tendencia.*"
+            )
+            
+            # Enviar notificación en color púrpura/dorado para destacar la entrada de alto rendimiento
+            send_discord_notification(title, description, color=0x9b59b6)
+
+# ==========================================
+# 6. MÓDULO DE PRONÓSTICOS DEPORTIVOS
 # ==========================================
 def format_sports_signal(sport_emoji, sport_name, home_team, away_team, pick_type, winner_or_line, odds, confidence):
     """
-    Formatea las señales deportivas detallando:
-    - Para ganador: Nombre explícito del equipo/jugador ganador (ej. Gana Local (R. Nadal)).
-    - Para Over/Under: El tipo y valor total explícito (ej. Over 218.5 Puntos / Under 8.5 Carreras / Over 2.5 Goles).
+    Formatea señales deportivas detallando:
+    - Ganador: Nombre explícito (ej. Gana Local (R. Nadal))
+    - Over/Under: Línea exacta (ej. Over 218.5 Puntos / Under 8.5 Carreras)
     """
     if pick_type == "Gana Local":
         prediction_str = f"Gana Local ({home_team})"
     elif pick_type == "Gana Visitante":
         prediction_str = f"Gana Visitante ({away_team})"
     elif pick_type in ["Over", "Under"]:
-        prediction_str = f"{pick_type} {winner_or_line}"  # ej. "Over 218.5 Puntos" o "Under 2.5 Goles"
+        prediction_str = f"{pick_type} {winner_or_line}"
     else:
         prediction_str = f"{pick_type} ({winner_or_line})"
 
@@ -155,17 +183,16 @@ def format_sports_signal(sport_emoji, sport_name, home_team, away_team, pick_typ
     send_discord_notification(title, description, color=0x3498db)
 
 def check_kalshi_markets():
-    # Lógica de consulta a la API de Kalshi para mercados de eventos y predicciones
+    # Lógica de polling a la API de Kalshi
     pass
 
 # ==========================================
-# 6. BUCLE PRINCIPAL DE MONITOREO
+# 7. BUCLE PRINCIPAL DE MONITOREO
 # ==========================================
 def start_monitoring():
-    print("[MONITOR] Rastreo iniciado para X, Truth Social y Noticias de Wall Street...")
+    print("[MONITOR] Rastreo iniciado para Kalshi, X, Truth Social y Noticias...")
     while True:
         try:
-            # Espacio para polling de feeds RSS de Wall Street, APIs de X / Truth Social y Kalshi
             check_kalshi_markets()
             time.sleep(15)
         except Exception as e:
@@ -173,21 +200,20 @@ def start_monitoring():
             time.sleep(10)
 
 # ==========================================
-# 7. PUNTO DE ENTRADA
+# 8. PUNTO DE ENTRADA
 # ==========================================
 if __name__ == "__main__":
-    # Servidor HTTP secundario para evitar cierres en Render
+    # Servidor HTTP secundario para Render
     http_thread = threading.Thread(target=run_http_server, daemon=True)
     http_thread.start()
 
     send_discord_notification(
         "🟢 BOT DE MONITOREO INICIADO",
         "El bot está activo y monitoreando:\n"
-        "- **10+ Personas Influyentes** (Musk, Trump, Powell, Saylor, etc.)\n"
-        "- **10+ Empresas Clave** (MicroStrategy, Tesla, BlackRock, Nvidia, etc.)\n"
-        "- **Plataformas:** X, Truth Social y Noticias de Wall Street\n"
-        "- **Alertas Deportivas Detalladas** (Nombre del ganador + Líneas de Over/Under)\n"
-        "- **Control de Volatilidad:** 15 Minutos",
+        "- **10+ Personas Influyentes & Empresas Clave**\n"
+        "- **Alertas Kalshi:** Estrategia de Compras Abajo (Dip 25%-35%)\n"
+        "- **Alertas Deportivas Clarificadas:** Ganador explícito + Líneas Over/Under\n"
+        "- **Control de Volatilidad:** Ventana de 15 Minutos",
         color=0x3498db
     )
 
