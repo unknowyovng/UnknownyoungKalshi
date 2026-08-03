@@ -40,32 +40,26 @@ DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "")
 KALSHI_KEY_ID = os.environ.get("KALSHI_KEY_ID", "")
 KALSHI_PRIVATE_KEY_PEM = os.environ.get("KALSHI_PRIVATE_KEY", "")
 
+# Nuevo endpoint de la API de Kalshi
+KALSHI_BASE_URL = "https://api.elections.kalshi.com"
+
 def get_kalshi_headers(method: str, path: str) -> dict:
-    """
-    Genera los headers necesarios para la API v2 de Kalshi usando firma RSA.
-    """
     if not KALSHI_KEY_ID or not KALSHI_PRIVATE_KEY_PEM:
         print("[AUTH WARNING] KALSHI_KEY_ID o KALSHI_PRIVATE_KEY no configurados.")
         return {"Content-Type": "application/json"}
 
     try:
-        # Formatear la clave privada por si vienen saltos de línea escapados (\n)
         formatted_pem = KALSHI_PRIVATE_KEY_PEM.replace('\\n', '\n').strip()
-
-        # Timestamp en milisegundos
         timestamp = str(int(time.time() * 1000))
         
-        # Mensaje requerido por Kalshi: timestamp + método + ruta (sin dominio)
         msg_string = f"{timestamp}{method.upper()}{path}"
         msg_bytes = msg_string.encode('utf-8')
 
-        # Cargar clave privada
         private_key = serialization.load_pem_private_key(
             formatted_pem.encode('utf-8'),
             password=None
         )
 
-        # Firmar mensaje usando RSA-PSS
         signature = private_key.sign(
             msg_bytes,
             padding.PSS(
@@ -108,14 +102,13 @@ def check_btc_15m_markets():
         print("[BTC 15M] Evaluating Bitcoin 15m prediction market...")
 
         path = "/trade-api/v2/markets"
-        url = f"https://trading-api.kalshi.com{path}"
+        url = f"{KALSHI_BASE_URL}{path}"
         params = {
             "limit": 10,
             "series_ticker": "KXBTC15M",
             "status": "open"
         }
 
-        # Generar headers firmados criptográficamente
         headers = get_kalshi_headers("GET", path)
 
         response = requests.get(url, headers=headers, params=params, timeout=10)
