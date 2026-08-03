@@ -2,19 +2,39 @@ import os
 import time
 import requests
 import asyncio
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # ==========================================
-# CONFIGURACIÓN DE VARIABLES DE ENTORNO
+# 1. SERVIDOR DE SALUD (HEALTH CHECK) PARA RENDER
 # ==========================================
-# Reemplaza la URL de abajo con la URL de tu Webhook de Discord
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        # Responde 200 OK a las peticiones HTTP de Render para confirmar puerto abierto
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"OK - Bot running")
+
+    def log_message(self, format, *args):
+        # Silencia los logs de peticiones HTTP para mantener limpia la consola
+        return
+
+def start_health_server():
+    port = int(os.getenv("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+    print(f"[SERVIDOR HTTP] Servidor de mantener vivo activo en puerto {port}")
+    server.serve_forever()
+
+# ==========================================
+# 2. CONFIGURACIÓN DE VARIABLES DE ENTORNO
+# ==========================================
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "TU_DISCORD_WEBHOOK_URL_AQUI")
-
-# Claves de API para monitoreo de portfolio / exchanges (opcional)
 EXCHANGE_API_KEY = os.getenv("EXCHANGE_API_KEY", "")
 EXCHANGE_API_SECRET = os.getenv("EXCHANGE_API_SECRET", "")
 
 # ==========================================
-# MÓDULO DE ALERTAS DISCORD
+# 3. MÓDULO DE ALERTAS DISCORD
 # ==========================================
 def send_discord_alert(title: str, description: str, color: int = 3447003):
     """Envía un mensaje embebido al canal de Discord configurado."""
@@ -39,7 +59,7 @@ def send_discord_alert(title: str, description: str, color: int = 3447003):
         print(f"[EXCEPCIÓN DISCORD] Error al enviar alerta: {e}")
 
 # ==========================================
-# MÓDULO DE MONITOREO DE LATENCIA
+# 4. MÓDULO DE MONITOREO DE LATENCIA
 # ==========================================
 def check_latency(target_url: str = "https://api.coinbase.com/v2/time", threshold_ms: float = 500.0):
     """Mide el tiempo de respuesta del servidor objetivo y alerta si hay retraso."""
@@ -66,18 +86,16 @@ def check_latency(target_url: str = "https://api.coinbase.com/v2/time", threshol
         return None
 
 # ==========================================
-# MÓDULO DE MONITOREO DE BALANCE / PORTFOLIO
+# 5. MÓDULO DE MONITOREO DE BALANCE / PORTFOLIO
 # ==========================================
 def check_portfolio_status():
     """Consulta el estado del balance y genera un reporte."""
-    # Estructura base para conectar con tus APIs de Trading o Coinbase
     if not EXCHANGE_API_KEY or not EXCHANGE_API_SECRET:
         print("[INFO] API Keys no configuradas. Generando reporte simulado de balance.")
-        # Ejemplo/Simulación:
         total_balance_usd = 12500.50
         daily_pnl = +3.45
     else:
-        # Aquí va la integración real con la API usando EXCHANGE_API_KEY y SECRET
+        # Aquí se integrará la consulta real con API keys cuando las configures
         total_balance_usd = 0.0
         daily_pnl = 0.0
 
@@ -93,7 +111,7 @@ def check_portfolio_status():
     )
 
 # ==========================================
-# BUCLE PRINCIPAL (MAIN LOOP)
+# 6. BUCLE PRINCIPAL (MAIN LOOP)
 # ==========================================
 async def main_loop():
     send_discord_alert(
@@ -109,11 +127,15 @@ async def main_loop():
         # 2. Chequeo de Portfolio
         check_portfolio_status()
         
-        # Espera de 15 minutos para la siguiente ejecución
+        # Espera de 15 minutos entre iteraciones
         await asyncio.sleep(900)
 
 if __name__ == "__main__":
     try:
+        # Inicia el servidor HTTP en un hilo independiente antes del bucle principal
+        threading.Thread(target=start_health_server, daemon=True).start()
+        
+        # Inicia el loop del bot
         asyncio.run(main_loop())
     except KeyboardInterrupt:
         print("\n[BOT] Detenido por el usuario.")
