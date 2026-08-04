@@ -76,7 +76,7 @@ def calculate_odds(prob_percent):
 
 def analyze_sports_recommendation(title, last_price):
     """
-    Analiza la especificación de la apuesta y genera recomendación detallada.
+    Analiza la especificación de la apuesta y genera recomendación detallada para Scalping.
     """
     title_lower = title.lower()
     
@@ -110,11 +110,11 @@ def analyze_sports_recommendation(title, last_price):
         else:
             pick = "Entrada en Sets a Favor del Underdog"
 
-    # 4. Ganador directo / Underdog
+    # 4. Ganador directo / Underdog (Ideal para scalping en vivo)
     else:
-        rec_type = "GANADOR DIRECTO / ANOMALÍA"
-        if last_price <= 15:
-            pick = "COMPRAR SÍ (Underdog con valor oculto 🎯)"
+        rec_type = "GANADOR DIRECTO / ANOMALÍA EN VIVO"
+        if last_price <= 25:
+            pick = "COMPRAR SÍ (Underdog con valor alto 🎯 - Excelente para Scalping)"
         else:
             pick = "COMPRAR NO (Favorito Sobrevalorado)"
 
@@ -122,11 +122,12 @@ def analyze_sports_recommendation(title, last_price):
 
 def is_within_max_hours(date_string, max_hours=48):
     """
-    Filtro temporal ultra estricto para evitar eventos lejanos (2027, 2030, etc.).
-    Valida que la fecha de expiración/cierre esté estrictamente dentro de las próximas 48 horas.
+    Valida la fecha de expiración. Si no hay fecha (None), retorna True 
+    para permitir evaluar partidos en vivo cuya fecha de cierre exacta no expone la API de eventos.
+    Si trae fecha, rechaza estrictamente lo que pase de 48 horas (ej. 2027, 2030).
     """
     if not date_string:
-        return False  # Si no tiene fecha explícita, se descarta por seguridad para evitar basura a largo plazo
+        return True  # Permitir si la API no provee fecha para no bloquear partidos en vivo
     try:
         clean_date = date_string.replace("Z", "+00:00")
         event_date = datetime.fromisoformat(clean_date)
@@ -134,10 +135,10 @@ def is_within_max_hours(date_string, max_hours=48):
         now = datetime.now(timezone.utc)
         max_limit = now + timedelta(hours=max_hours)
         
-        # Permitir eventos en curso recientes (hasta 2h atrás por retrasos de API) y máximo el límite de horas
-        return (now - timedelta(hours=2)) <= event_date <= max_limit
+        # Permitir eventos en curso o hasta el límite de 48 horas
+        return (now - timedelta(hours=6)) <= event_date <= max_limit
     except Exception:
-        return False
+        return True
 
 # ---------------------------------------------------------
 # 4. MONITOREO DE MERCADOS PÚBLICOS KALSHI
@@ -146,7 +147,7 @@ KALSHI_API_URL = "https://api.elections.kalshi.com/v1/events"
 
 def scan_kalshi_markets():
     """
-    Escanea mercados de Kalshi buscando eventos de Bitcoin y anomalías en Deportes (máx. 48 horas).
+    Escanea mercados de Kalshi buscando eventos de Bitcoin y anomalías en Deportes en vivo / corto plazo.
     """
     try:
         response = requests.get(
@@ -174,11 +175,11 @@ def scan_kalshi_markets():
             market = markets[0]
             last_price = market.get("last_price", 0)
 
-            # --- FILTRO TEMPORAL ESTRICTO (MÁXIMO 48 HORAS) ---
+            # --- FILTRO TEMPORAL INTELIGENTE ---
             expiration_time = market.get("expiration_time") or market.get("close_time") or event.get("mutually_exclusive_expiration_date")
             
             if not is_within_max_hours(expiration_time, max_hours=48):
-                # Descarta silenciosamente cualquier evento fuera del rango de 48 horas (ej. 2027, 2030)
+                # Descarta eventos lejanos a futuro (>48h como 2027, 2030)
                 continue
 
             # --- ESTRUCTURA DE URL CORREGIDA ---
@@ -203,9 +204,10 @@ def scan_kalshi_markets():
                 )
                 send_discord_alert(f"Predicción Bitcoin {timeframe}", details, alert_type=alert_tag)
 
-            # --- Detector de Anomalías en Deportes ---
+            # --- Detector de Anomalías en Deportes (En Vivo y Próximos) ---
             elif "SPORT" in category or "GAME" in category or "MATCH" in category or "SERIES" in category:
-                if last_price <= 20 or last_price >= 80:
+                # Ampliamos el rango de anomalía hasta 28% para captar underdogs locales con valor de scalping
+                if 0 < last_price <= 28 or last_price >= 80:
                     dec_odds, amer_odds = calculate_odds(last_price)
                     rec_category, pick_recommendation = analyze_sports_recommendation(title, last_price)
                     
@@ -214,9 +216,9 @@ def scan_kalshi_markets():
                         f"📊 **Tipo de Mercado:** {rec_category}\n"
                         f"📉 **Probabilidad en Kalshi:** `{last_price}%`\n"
                         f"💵 **Cuota Estimada:** `{dec_odds}x` ({amer_odds})\n\n"
-                        f"🎯 **RECOMENDACIÓN DE ENTRADA:**\n"
+                        f"🎯 **RECOMENDACIÓN DE ENTRADA (SCALPING):**\n"
                         f"👉 **Apostar por:** `{pick_recommendation}`\n"
-                        f"💡 *Estrategia:* Entrar a cuota alta y buscar salida con beneficio al subir la cuota (35-40%).\n\n"
+                        f"💡 *Estrategia:* Partido en vivo/cercano. Entrar a cuota alta y asegurar profit antes de que cambie el marcador.\n\n"
                         f"🔗 [Abrir Mercado en Kalshi Directamente]({kalshi_link})"
                     )
                     send_discord_alert("ANOMALÍA DETECTADA - APUESTA DE VALOR", details, alert_type="SPORTS")
@@ -253,7 +255,7 @@ def scan_influential_news():
 # ---------------------------------------------------------
 # 6. BUCLE PRINCIPAL 24/7 Y EJECUCIÓN
 # ---------------------------------------------------------
-def main_loop():
+main_loop():
     print("🚀 Iniciando bucle de monitoreo continuo (24/7)...")
     while True:
         try:
