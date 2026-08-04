@@ -113,7 +113,7 @@ def analyze_sports_recommendation(title, last_price):
     # 4. Ganador directo / Underdog (Ideal para scalping en vivo)
     else:
         rec_type = "GANADOR DIRECTO / ANOMALÍA EN VIVO"
-        if last_price <= 25:
+        if last_price <= 28:
             pick = "COMPRAR SÍ (Underdog con valor alto 🎯 - Excelente para Scalping)"
         else:
             pick = "COMPRAR NO (Favorito Sobrevalorado)"
@@ -123,11 +123,11 @@ def analyze_sports_recommendation(title, last_price):
 def is_within_max_hours(date_string, max_hours=48):
     """
     Valida la fecha de expiración. Si no hay fecha (None), retorna True 
-    para permitir evaluar partidos en vivo cuya fecha de cierre exacta no expone la API de eventos.
+    para permitir evaluar partidos en vivo cuya fecha exacta no expone la API.
     Si trae fecha, rechaza estrictamente lo que pase de 48 horas (ej. 2027, 2030).
     """
     if not date_string:
-        return True  # Permitir si la API no provee fecha para no bloquear partidos en vivo
+        return True
     try:
         clean_date = date_string.replace("Z", "+00:00")
         event_date = datetime.fromisoformat(clean_date)
@@ -135,7 +135,6 @@ def is_within_max_hours(date_string, max_hours=48):
         now = datetime.now(timezone.utc)
         max_limit = now + timedelta(hours=max_hours)
         
-        # Permitir eventos en curso o hasta el límite de 48 horas
         return (now - timedelta(hours=6)) <= event_date <= max_limit
     except Exception:
         return True
@@ -179,7 +178,6 @@ def scan_kalshi_markets():
             expiration_time = market.get("expiration_time") or market.get("close_time") or event.get("mutually_exclusive_expiration_date")
             
             if not is_within_max_hours(expiration_time, max_hours=48):
-                # Descarta eventos lejanos a futuro (>48h como 2027, 2030)
                 continue
 
             # --- ESTRUCTURA DE URL CORREGIDA ---
@@ -206,7 +204,6 @@ def scan_kalshi_markets():
 
             # --- Detector de Anomalías en Deportes (En Vivo y Próximos) ---
             elif "SPORT" in category or "GAME" in category or "MATCH" in category or "SERIES" in category:
-                # Ampliamos el rango de anomalía hasta 28% para captar underdogs locales con valor de scalping
                 if 0 < last_price <= 28 or last_price >= 80:
                     dec_odds, amer_odds = calculate_odds(last_price)
                     rec_category, pick_recommendation = analyze_sports_recommendation(title, last_price)
@@ -255,7 +252,7 @@ def scan_influential_news():
 # ---------------------------------------------------------
 # 6. BUCLE PRINCIPAL 24/7 Y EJECUCIÓN
 # ---------------------------------------------------------
-main_loop():
+def main_loop():
     print("🚀 Iniciando bucle de monitoreo continuo (24/7)...")
     while True:
         try:
