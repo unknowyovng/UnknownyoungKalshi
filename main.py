@@ -24,7 +24,7 @@ def run_flask():
 # ==========================================
 # CONFIGURACIÓN Y PARÁMETROS GLOBALES
 # ==========================================
-DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1533349076593283252/QPKKfcqt0F1I0WcUEnwI5GjVsQTQYL23BvX8F0YM1p4laseCH0iDNPhdfd0VApHafggJ"
+DISCORD_WEBHOOK_URL = os.environ.get("https://discord.com/api/webhooks/1534228345645039680/OP6raerP1RlkCl6WJvJ_Vto9FSJ05i42xOtRDbhHY-6KPv3Wlmgg9yatZEb-gqmiXbsz")
 COINBASE_WS_URL = "wss://ws-feed.exchange.coinbase.com"
 
 # Estrategia y Filtros
