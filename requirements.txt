@@ -7,3 +7,5 @@ cryptography
 pandas
 ta
 flask
+playwright
+gunicorn
