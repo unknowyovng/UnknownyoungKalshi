@@ -56,15 +56,14 @@ def build_safe_kalshi_url(ticker, series_ticker=None):
     return f"https://kalshi.com/markets?search={ticker.lower()}"
 
 # ==========================================
-# 3. FILTROS DE SEGURIDAD (48 HRS Y LARGO PLAZO)
+# 3. FILTROS DE SEGURIDAD Y DEPORTE (TENIS AMPLIADO)
 # ==========================================
 def is_long_term_or_invalid_market(title, subtitle=""):
     """
-    Filtra mercados de largo plazo, elecciones de sedes o eventos que no sean partidos directos.
+    Filtra mercados de largo plazo o eventos que no sean partidos directos.
     """
     text_to_check = f"{title} {subtitle}".lower()
     
-    # Términos excluidos (premios, hosting, torneos lejanos, etc.)
     forbidden_terms = [
         "who will host", "host the", "championships before", 
         "will win the", "winner of the", "mvp", "champion 20",
@@ -75,9 +74,25 @@ def is_long_term_or_invalid_market(title, subtitle=""):
         if term in text_to_check:
             return True
             
-    # Filtro por años futuros lejanos (2027 en adelante)
     for year in range(2027, 2045):
         if str(year) in text_to_check:
+            return True
+            
+    return False
+
+def is_tennis_market(title, subtitle="", series_ticker=""):
+    """
+    Filtra y acepta todas las variantes de tenis en Kalshi:
+    Tenis de mesa, ITF, WTA, ATP, partidos de 3 y 5 sets, etc.
+    """
+    text_to_check = f"{title} {subtitle} {series_ticker}".lower()
+    tennis_keywords = [
+        "tennis", "tenis", "atp", "wta", "itf", "challenger", 
+        "table tennis", "ping pong", "tenis de mesa", "set"
+    ]
+    
+    for kw in tennis_keywords:
+        if kw in text_to_check:
             return True
             
     return False
@@ -98,11 +113,11 @@ def is_within_48_hours(close_time_str):
         return False
 
 # ==========================================
-# 4. EXTRACCIÓN Y DETECCIÓN DEL UNDERDOG
+# 4. EXTRACCIÓN Y DETECCIÓN DE DOBLE PROFIT (SCALPING)
 # ==========================================
 def parse_sports_underdog(market):
     """
-    Identifica el nombre específico del equipo o jugador Underdog y formatea la recomendación.
+    Identifica el nombre del jugador/equipo underdog y genera la estrategia de doble profit.
     """
     title = market.get("title", "")
     subtitle = market.get("subtitle", "")
@@ -117,8 +132,10 @@ def parse_sports_underdog(market):
     
     recommendation = (
         f"👉 **Apostar por:** COMPRAR SÍ a **{target_name}**\n"
-        f"🎯 **Estrategia:** *Underdog de Valor Alto / Scalping*\n"
-        f"💡 **Recomendación:** Entrar a la cuota actual y asegurar *profit* (Cash Out) con cualquier movimiento favorable en el marcador."
+        f"🎯 **Estrategia Doble Profit (Scalping):**\n"
+        f"1. Entrar al underdog actual a cuota alta.\n"
+        f"2. Vender en profit (Cash Out) cuando el marcador cambie a favor.\n"
+        f"3. Re-entrar en contra con el nuevo giro del partido para capturar un **doble profit** en el mismo evento."
     )
     
     return target_name, decimal_odds, american_odds, recommendation
@@ -151,6 +168,10 @@ def fetch_and_process_markets():
             if is_long_term_or_invalid_market(title, subtitle):
                 continue
 
+            # Filtrar exclusivamente mercados de Tenis (todas las categorías)
+            if not is_tennis_market(title, subtitle, series_ticker):
+                continue
+
             if not is_within_48_hours(close_time):
                 continue
 
@@ -162,11 +183,11 @@ def fetch_and_process_markets():
 
                 payload = {
                     "username": "Captain Hook",
-                    "content": f"🚨 **[SPORTS] ANOMALÍA DETECTADA - APUESTA DE VALOR**",
+                    "content": f"🚨 **[TENIS - DOBLE PROFIT] ANOMALÍA DETECTADA**",
                     "embeds": [
                         {
-                            "title": f"🏆 Evento: {title}",
-                            "description": f"**Objetivo detectado:** {target_name}\n"
+                            "title": f"🎾 Partido: {title}",
+                            "description": f"**Objetivo / Underdog detectado:** {target_name}\n"
                                            f"📊 **Probabilidad en Kalshi:** {last_price}%\n"
                                            f"💵 **Cuota Estimada:** {decimal_odds}x ({american_odds})\n\n"
                                            f"{recommendation}\n\n"
@@ -179,19 +200,19 @@ def fetch_and_process_markets():
 
                 res = requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=10)
                 if res.status_code in [200, 204]:
-                    print(f"Alerta enviada correctamente para: {ticker}")
+                    print(f"Alerta de tenis enviada correctamente para: {ticker}")
                     seen_alerts.add(ticker)
                 else:
                     print(f"Error enviando webhook a Discord: {res.status_code}")
 
     except Exception as e:
-        print(f"Error procesando los mercados de Kalshi: {e}")
+        print(f"Error procesando los mercados de Tenis en Kalshi: {e}")
 
 # ==========================================
 # 6. BUCLE PRINCIPAL DE EJECUCIÓN
 # ==========================================
 if __name__ == "__main__":
-    print("Iniciando Bot de Alertas con Filtros Ajustados...")
+    print("Iniciando Bot de Tenis (Todas las categorías) con Doble Profit...")
     while True:
         fetch_and_process_markets()
         time.sleep(60)
