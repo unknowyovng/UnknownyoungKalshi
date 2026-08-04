@@ -5,7 +5,7 @@ from flask import Flask
 
 app = Flask(__name__)
 BASE_URL = "https://api.elections.kalshi.com/trade-api/v2"
-WEBHOOK_URL = "TU_WEBHOOK_DE_DISCORD_AQUI"
+WEBHOOK_URL = "https://discord.com/api/webhooks/1533349076593283252/QPKKfcqt0F1I0WcUEnwI5GjVsQTQYL23BvX8F0YM1p4laseCH0iDNPhdfd0VApHafggJ"
 
 
 @app.route("/", methods=["GET", "HEAD"])
