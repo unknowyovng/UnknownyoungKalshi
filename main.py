@@ -20,23 +20,22 @@ def run_http_server():
 # ==========================================
 
 URL_KALSHI_DEFAULT = "https://kalshi.com"
-DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "TU_WEBHOOK_DE_DISCORD_AQUI")
+DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "")
 
 def enviar_a_discord(mensaje):
     """
-    Envía la alerta formateada directamente a tu canal de Discord mediante Webhook.
+    Envía la alerta directamente a tu canal de Discord mediante Webhook de forma forzada.
     """
-    if "TU_WEBHOOK_DE_DISCORD" in DISCORD_WEBHOOK_URL:
-        print(">>> [AVISO] Webhook de Discord no configurado en variables de entorno.")
+    if not DISCORD_WEBHOOK_URL:
+        print(">>> [ERROR] La variable DISCORD_WEBHOOK_URL está vacía en Render.")
         return
 
     payload = {"content": mensaje}
     try:
-        response = requests.post(DISCORD_WEBHOOK_URL, json=payload)
-        if response.status_code != 204 and response.status_code != 200:
-            print(f"Error al enviar a Discord: {response.status_code}, {response.text}")
+        response = requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=10)
+        print(f">>> [DISCORD] Estado de envío: {response.status_code}")
     except Exception as e:
-        print(f"Excepción al conectar con Discord: {e}")
+        print(f">>> [EXCEPCIÓN DISCORD] Error al conectar con el Webhook: {e}")
 
 def obtener_precio_bitcoin_real():
     """
@@ -50,7 +49,7 @@ def obtener_precio_bitcoin_real():
         return f"{precio_float:,.2f}"
     except Exception as e:
         print(f"No se pudo obtener el precio en vivo de Coinbase: {e}")
-        return "63,718.00" # Respaldo alineado con tu captura actual
+        return "63,718.00"
 
 def generar_mensaje_tendencia_btc(tendencia, precio_actual, detalle):
     if tendencia.upper() == "ALCISTA":
@@ -91,7 +90,7 @@ def generar_mensaje_apuestas(evento):
 
 def monitor_kalshi_bitcoin():
     tendencia_actual = "ALCISTA" 
-    precio_btc = obtener_precio_bitcoin_real() # Consulta el precio real sincronizado
+    precio_btc = obtener_precio_bitcoin_real()
     detalle_analisis = "Cruce de medias móviles y cierre de contratos consecutivos con presión compradora."
 
     alerta_btc = generar_mensaje_tendencia_btc(tendencia_actual, precio_btc, detalle_analisis)
@@ -101,10 +100,6 @@ def monitor_kalshi_bitcoin():
     enviar_a_discord(alerta_btc)
 
 def obtener_partidos_en_vivo_de_kalshi():
-    """
-    Filtra estrictamente para omitir partidos finalizados ('Outcome determined' o 'Finalizado')
-    y prioriza los eventos activos en tiempo real.
-    """
     lista_eventos_mercado = [
         {
             'nombre': 'WTA Tenis - En Vivo (Set 2)',
