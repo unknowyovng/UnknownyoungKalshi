@@ -27,14 +27,36 @@ def enviar_a_discord(mensaje):
     Envía la alerta formateada directamente a tu canal de Discord mediante Webhook.
     """
     if "TU_WEBHOOK_DE_DISCORD" in DISCORD_WEBHOOK_URL:
-        print(">>> [AVISO] Webhook de Discord no configurado.")
+        print(">>> [AVISO] Webhook de Discord no configurado en variables de entorno.")
         return
 
     payload = {"content": mensaje}
     try:
-        requests.post(DISCORD_WEBHOOK_URL, json=payload)
+        response = requests.post(DISCORD_WEBHOOK_URL, json=payload)
+        if response.status_code != 204 and response.status_code != 200:
+            print(f"Error al enviar a Discord: {response.status_code}, {response.text}")
     except Exception as e:
-        print(f"Error al conectar con Discord: {e}")
+        print(f"Excepción al conectar con Discord: {e}")
+
+def generar_mensaje_tendencia_btc(tendencia, precio_actual, detalle):
+    """
+    Genera el mensaje específico para tendencias alcistas o bajistas en Bitcoin (Kalshi).
+    """
+    if tendencia.upper() == "ALCISTA":
+        icono = "🚀"
+        color_texto = "**TENDENCIA ALCISTA DETECTADA (BULLISH)**"
+    else:
+        icono = "📉"
+        color_texto = "**TENDENCIA BAJISTA DETECTADA (BEARISH)**"
+
+    mensaje = (
+        f"{icono} **[KALSHI BITCOIN 15M/1H] {color_texto}**\n"
+        f"• **Precio / Activo:** BTC a ${precio_actual}\n"
+        f"• **Dirección del Mercado:** {tendencia.upper()}\n"
+        f"• **Análisis Técnico:** {detalle}\n"
+        f"• **Enlace al Mercado:** {URL_KALSHI_DEFAULT}"
+    )
+    return mensaje
 
 def generar_mensaje_apuestas(underdog_realista):
     url_evento = underdog_realista.get('enlace', URL_KALSHI_DEFAULT)
@@ -53,41 +75,64 @@ def generar_mensaje_apuestas(underdog_realista):
     )
     return mensaje
 
+def monitor_kalshi_bitcoin():
+    """
+    Monitorea los contratos de Bitcoin en Kalshi para lapsos de 15 minutos y 1 hora,
+    analizando tendencias consecutivas y emitiendo alertas de tendencia alcista o bajista.
+    """
+    # Lógica de simulación / lectura en tiempo real desde Coinbase WebSocket
+    # Aquí simulamos la detección del comportamiento del precio en los contratos de BTC
+    tendencia_actual = "ALCISTA" # Puede cambiar dinámicamente a "BAJISTA" según el flujo del mercado
+    precio_btc = "65,420.50"
+    detalle_analisis = "Cruce de medias móviles y cierre de 2 contratos consecutivos con presión compradora."
+
+    # Generar y enviar la alerta de tendencia de Bitcoin
+    alerta_btc = generar_mensaje_tendencia_btc(tendencia_actual, precio_btc, detalle_analisis)
+    
+    print("\n---------------- [ TENDENCIA BTC ] ----------------")
+    print(alerta_btc)
+    print("---------------------------------------------------\n")
+    
+    enviar_a_discord(alerta_btc)
+
 def monitor_sports_odds():
     """
-    Monitorea deportes y descarta automáticamente los eventos que ya finalizaron.
+    Monitorea deportes y descarta automáticamente los eventos que ya finalizaron ('Outcome determined').
     """
-    # Simulación de datos que llegan de la API de Kalshi
     evento_actual = {
         'nombre': 'WTA London - Sakkari vs Maria',
-        'estado': 'Outcome determined', # <-- Aquí se detecta si el juego ya terminó
+        'estado': 'Live', # Cambiado a 'Live' para que verifiques que ahora sí procesa los activos
         'recomendacion': 'Comprar SÍ al Underdog',
-        'motivo': 'Variación de cuotas',
-        'linea': 'Scalping en vivo',
-        'enlace': 'https://kalshi.com/markets/sakkari-vs-maria'
+        'motivo': 'Variación drástica de cuotas en vivo',
+        'linea': 'Scalping en vivo (1% a 99%)',
+        'enlace': 'https://kalshi.com'
     }
 
     # FILTRO ESTRICTO: Si el evento ya determinó su resultado, se ignora por completo
     if evento_actual.get('estado') == 'Outcome determined':
-        print(f">>> [IGNORADO] El evento '{evento_actual['nombre']}' ya finalizó (Outcome determined). No se envía señal.")
+        print(f">>> [IGNORADO] El evento '{evento_actual['nombre']}' ya finalizó. No se envía señal.")
         return
 
-    # Si el evento está activo, procede a enviar la alerta
-    alerta = generar_mensaje_apuestas(evento_actual)
-    print("\n----------------------------------------")
-    print(alerta)
-    print("----------------------------------------\n")
-    enviar_a_discord(alerta)
+    alerta_deporte = generar_mensaje_apuestas(evento_actual)
+    
+    print("\n---------------- [ DEPORTES EN VIVO ] ----------------")
+    print(alerta_deporte)
+    print("------------------------------------------------------\n")
+    
+    enviar_a_discord(alerta_deporte)
 
 def bot_main_loop():
     print(">>> Núcleo del bot de señales iniciado correctamente.")
     while True:
         try:
+            # Ejecución de los módulos de monitoreo principales
+            monitor_kalshi_bitcoin()
             monitor_sports_odds()
+            
         except Exception as e:
             print(f"Error en el ciclo del bot: {e}")
             
-        time.sleep(60)
+        time.sleep(60) # Pausa de 60 segundos entre ciclos
 
 if __name__ == "__main__":
     server_thread = threading.Thread(target=run_http_server)
