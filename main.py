@@ -84,25 +84,38 @@ def analyze_sports_recommendation(title, last_price):
         rec_type = "TENIS (SETS)"
         pick = "MÁS DE / BAJO DE 3 SETS (Estrategia Scalping)"
     else:
-        rec_type = "GANADOR DIRECTO / ANOMALÍA EN VIVO"
+        rec_type = "PARTIDO EN VIVO / ENCUENTRO DIRECTO"
         pick = "COMPRAR SÍ (Underdog con valor alto 🎯 - Excelente para Scalping)"
 
     return rec_type, pick
 
-def contains_long_term_years(title):
+def contains_long_term_years_or_non_live(title):
     """
-    Filtro de seguridad por texto ultra estricto: Bloquea cualquier mercado a largo plazo,
-    menciones de años futuros (2027 en adelante) o frases de torneos a varios años ("before").
+    Filtro avanzado: Bloquea años futuros, mercados a largo plazo y eventos
+    que no son partidos en vivo (como debuts, drafts, fechas de nominación, etc.).
     """
     title_lower = title.lower()
+    
+    # Términos prohibidos (fechas lejanas, eventos de fichajes, debuts o galardones)
     forbidden_terms = [
         "2027", "2028", "2029", "2030", "2031", "2032", "2033", "2034", "2035",
-        "before", "to win a", "championships", "career", "season total"
+        "before", "to win a", "championships", "career", "season total",
+        "debut", "draft", "award", "signing", "trade", "contract", "coach", "manager"
     ]
     for term in forbidden_terms:
         if term in title_lower:
             return True
+            
     return False
+
+def is_valid_live_sport(title):
+    """
+    Valida estrictamente que el evento deportivo parezca un partido directo en curso o de corto plazo
+    buscando indicadores típicos en el título ("vs", guiones, nombres de ligas de partidos).
+    """
+    title_lower = title.lower()
+    valid_indicators = ["vs", " v ", "-", "game", "match", "open", "cup", "league", "tour"]
+    return any(indicator in title_lower for indicator in valid_indicators)
 
 def is_within_max_hours(date_string, max_hours=48):
     if not date_string:
@@ -138,31 +151,23 @@ def scan_kalshi_markets():
         for event in events:
             category = event.get("category", "").upper()
             title = event.get("title", "")
-            series_ticker = event.get("series_ticker", "")
-            event_ticker = event.get("event_ticker", "")
             markets = event.get("markets", [])
             
             if not markets:
                 continue
 
-            # --- FILTRO ANTICIPADO POR TÍTULO (BLOQUEA AÑOS Y LARGO PLAZO) ---
-            if contains_long_term_years(title):
+            # --- FILTROS DE EXCLUSIÓN ESTRICTOS ---
+            if contains_long_term_years_or_non_live(title):
                 continue
 
             market = markets[0]
             last_price = market.get("last_price", 0)
 
-            # --- FILTRO TEMPORAL POR FECHA ---
             expiration_time = market.get("expiration_time") or market.get("close_time") or event.get("mutually_exclusive_expiration_date")
             if not is_within_max_hours(expiration_time, max_hours=48):
                 continue
 
-            # --- ESTRUCTURA DE URL CORREGIDA ---
-            ticker_slug = series_ticker.lower() if series_ticker else event_ticker.lower()
-            if ticker_slug:
-                kalshi_link = f"https://kalshi.com/markets/{ticker_slug}"
-            else:
-                kalshi_link = "https://kalshi.com/markets"
+            kalshi_link = "https://kalshi.com/markets"
 
             # --- Evaluación Bitcoin 15m y 1h ---
             if "BITCOIN" in title.upper() or "BTC" in title.upper():
@@ -179,10 +184,9 @@ def scan_kalshi_markets():
                 )
                 send_discord_alert(f"Predicción Bitcoin {timeframe}", details, alert_type=alert_tag)
 
-            # --- Detector de Anomalías en Deportes (SOLO UNDERDOGS / VALOR BAJO PARA SCALPING) ---
+            # --- Detector de Anomalías en Deportes (SOLO PARTIDOS REALES EN VIVO / UNDERDOGS) ---
             elif "SPORT" in category or "GAME" in category or "MATCH" in category or "SERIES" in category:
-                # RESTRINGIDO SOLO A PRECIOS BAJOS (0 a 28%). Se elimina el >= 80 para evitar favoritos lejanos masivos.
-                if 0 < last_price <= 28:
+                if is_valid_live_sport(title) and (0 < last_price <= 28):
                     dec_odds, amer_odds = calculate_odds(last_price)
                     rec_category, pick_recommendation = analyze_sports_recommendation(title, last_price)
                     
