@@ -90,13 +90,7 @@ def analyze_sports_recommendation(title, last_price):
     return rec_type, pick
 
 def contains_long_term_years_or_non_live(title):
-    """
-    Filtro avanzado: Bloquea años futuros, mercados a largo plazo y eventos
-    que no son partidos en vivo (como debuts, drafts, fechas de nominación, etc.).
-    """
     title_lower = title.lower()
-    
-    # Términos prohibidos (fechas lejanas, eventos de fichajes, debuts o galardones)
     forbidden_terms = [
         "2027", "2028", "2029", "2030", "2031", "2032", "2033", "2034", "2035",
         "before", "to win a", "championships", "career", "season total",
@@ -105,14 +99,9 @@ def contains_long_term_years_or_non_live(title):
     for term in forbidden_terms:
         if term in title_lower:
             return True
-            
     return False
 
 def is_valid_live_sport(title):
-    """
-    Valida estrictamente que el evento deportivo parezca un partido directo en curso o de corto plazo
-    buscando indicadores típicos en el título ("vs", guiones, nombres de ligas de partidos).
-    """
     title_lower = title.lower()
     valid_indicators = ["vs", " v ", "-", "game", "match", "open", "cup", "league", "tour"]
     return any(indicator in title_lower for indicator in valid_indicators)
@@ -156,7 +145,6 @@ def scan_kalshi_markets():
             if not markets:
                 continue
 
-            # --- FILTROS DE EXCLUSIÓN ESTRICTOS ---
             if contains_long_term_years_or_non_live(title):
                 continue
 
@@ -167,7 +155,8 @@ def scan_kalshi_markets():
             if not is_within_max_hours(expiration_time, max_hours=48):
                 continue
 
-            kalshi_link = "https://kalshi.com/markets"
+            # --- URL SEGURA AL HOME DE KALSHI (EVITA 404) ---
+            kalshi_link = "https://kalshi.com"
 
             # --- Evaluación Bitcoin 15m y 1h ---
             if "BITCOIN" in title.upper() or "BTC" in title.upper():
@@ -180,7 +169,7 @@ def scan_kalshi_markets():
                     f"Probabilidad actual: `{last_price}%`\n"
                     f"Cuota Actual: `{dec_odds}x` ({amer_odds})\n"
                     f"Intervalo: **{timeframe}**\n"
-                    f"🔗 [Verificar Mercado en Kalshi]({kalshi_link})"
+                    f"🔗 [Ir a Kalshi]({kalshi_link})"
                 )
                 send_discord_alert(f"Predicción Bitcoin {timeframe}", details, alert_type=alert_tag)
 
@@ -198,7 +187,7 @@ def scan_kalshi_markets():
                         f"🎯 **RECOMENDACIÓN DE ENTRADA (SCALPING):**\n"
                         f"👉 **Apostar por:** `{pick_recommendation}`\n"
                         f"💡 *Estrategia:* Partido en vivo/cercano. Entrar a cuota alta y asegurar profit antes de que cambie el marcador.\n\n"
-                        f"🔗 [Abrir Mercado en Kalshi Directamente]({kalshi_link})"
+                        f"🔗 [Ir a Kalshi]({kalshi_link})"
                     )
                     send_discord_alert("ANOMALÍA DETECTADA - APUESTA DE VALOR", details, alert_type="SPORTS")
 
