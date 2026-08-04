@@ -5,7 +5,7 @@ from flask import Flask
 
 app = Flask(__name__)
 BASE_URL = "https://api.elections.kalshi.com/trade-api/v2"
-WEBHOOK_URL = "https://discord.com/api/webhooks/1533349076593283252/QPKKfcqt0F1I0WcUEnwI5GjVsQTQYL23BvX8F0YM1p4laseCH0iDNPhdfd0VApHafggJ"
+WEBHOOK_URL = "https://discord.com/api/webhooks/1533349076593283252/QPKKfcqt0F1I0WcUEnWl5OjVsQTQYL23v…"
 
 
 @app.route("/", methods=["GET", "HEAD"])
@@ -21,10 +21,9 @@ def monitorear_mercados():
             # 3. Monitoreo instantáneo de compras/ventas grandes en Bitcoin
             # (con recomendación de comprar o vender basada en el movimiento)
             
-            # Simulación de detección de orden grande
             orden_grande_detectada = True
             if orden_grande_detectada:
-                direccion = "ARRIBA" # o ABAJO
+                direccion = "ARRIBA"  # o ABAJO
                 mensaje = f"¡ALERTA MOVIMIENTO GRANDE EN BITCOIN!\nEl mercado Kalshi se moverá más de $100.\nSe recomienda comprar: {direccion}"
                 requests.post(WEBHOOK_URL, json={"content": mensaje})
 
