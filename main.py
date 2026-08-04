@@ -22,9 +22,6 @@ def run_http_server():
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "")
 
 def enviar_a_discord(mensaje):
-    """
-    Envía la alerta directamente a tu canal de Discord mediante Webhook.
-    """
     if not DISCORD_WEBHOOK_URL:
         print(">>> [ERROR] La variable DISCORD_WEBHOOK_URL está vacía en Render.")
         return
@@ -36,19 +33,19 @@ def enviar_a_discord(mensaje):
     except Exception as e:
         print(f">>> [EXCEPCIÓN DISCORD] Error al conectar con el Webhook: {e}")
 
+# Variable global para almacenar el precio anterior y detectar la dirección real
+precio_anterior_btc = None
+
 def obtener_precio_bitcoin_real():
-    """
-    Obtiene el precio en tiempo real de Bitcoin directamente desde la API pública de Coinbase.
-    """
     try:
         url_coinbase = "https://api.coinbase.com/v2/prices/BTC-USD/spot"
         response = requests.get(url_coinbase, timeout=5)
         data = response.json()
         precio_float = float(data['data']['amount'])
-        return f"{precio_float:,.2f}"
+        return precio_float
     except Exception as e:
         print(f"No se pudo obtener el precio en vivo de Coinbase: {e}")
-        return "63,718.00"
+        return None
 
 def generar_mensaje_tendencia_btc(tendencia, precio_actual, detalle):
     if tendencia.upper() == "ALCISTA":
@@ -62,7 +59,7 @@ def generar_mensaje_tendencia_btc(tendencia, precio_actual, detalle):
 
     mensaje = (
         f"{icono} **[KALSHI BITCOIN 15M/1H] {color_texto}**\n"
-        f"• **Precio / Activo:** BTC a ${precio_actual}\n"
+        f"• **Precio / Activo:** BTC a ${precio_actual:,.2f}\n"
         f"• **Dirección del Mercado:** {tendencia.upper()}\n"
         f"• **Análisis Técnico:** {detalle}\n"
         f"• **Enlace Directo:** [Abrir Mercado BTC en Kalshi]({enlace_seguro})"
@@ -70,32 +67,37 @@ def generar_mensaje_tendencia_btc(tendencia, precio_actual, detalle):
     return mensaje
 
 def monitor_kalshi_bitcoin():
-    tendencia_actual = "ALCISTA" 
-    precio_btc = obtener_precio_bitcoin_real()
-    detalle_analisis = "Cruce de medias móviles y cierre de contratos consecutivos con presión compradora."
+    global precio_anterior_btc
+    
+    precio_actual = obtener_precio_bitcoin_real()
+    if precio_actual is None:
+        return
 
-    alerta_btc = generar_mensaje_tendencia_btc(tendencia_actual, precio_btc, detalle_analisis)
+    # Determinar la tendencia real comparando con la lectura anterior
+    if precio_anterior_btc is None:
+        tendencia_actual = "ALCISTA"
+    elif precio_actual >= precio_anterior_btc:
+        tendencia_actual = "ALCISTA"
+    else:
+        tendencia_actual = "BAJISTA"
+
+    detalle_analisis = f"Evaluación de movimiento en tiempo real (Precio previo: ${precio_anterior_btc:,.2f} -> Actual: ${precio_actual:,.2f})." if precio_anterior_btc else "Inicialización de lectura de tendencia."
+    
+    # Actualizar el precio anterior para el siguiente ciclo
+    precio_anterior_btc = precio_actual
+
+    alerta_btc = generar_mensaje_tendencia_btc(tendencia_actual, precio_actual, detalle_analisis)
     print("\n---------------- [ TENDENCIA BTC ] ----------------")
     print(alerta_btc)
     print("---------------------------------------------------\n")
     enviar_a_discord(alerta_btc)
 
 def monitor_sports_odds():
-    """
-    Módulo de deportes limpio y libre de datos simulados o estáticos pasados.
-    Se conecta directamente al flujo de eventos reales para evitar señales falsas.
-    """
-    eventos_activos = []  # Sin datos estáticos ni de prueba. Solo eventos reales en tiempo real.
-    
-    if not eventos_activos:
-        print(">>> [SPORTS] No hay partidos en juego verificados en este instante. Sin señales falsas.")
-        return
-
-    for evento in eventos_activos:
-        pass
+    # Módulo de deportes limpio sin señales falsas pasadas
+    pass
 
 def bot_main_loop():
-    print(">>> Núcleo del bot de señales iniciado correctamente (Filtro estricto anti-falsas activado).")
+    print(">>> Núcleo del bot iniciado con detección real de dirección (Alcista/Bajista).")
     while True:
         try:
             monitor_kalshi_bitcoin()
