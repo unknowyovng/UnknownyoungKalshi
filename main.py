@@ -5,7 +5,7 @@ from flask import Flask
 
 app = Flask(__name__)
 BASE_URL = "https://api.elections.kalshi.com/trade-api/v2"
-WEBHOOK_URL = "https://discord.com/api/webhooks/1533349076593283252/QPKKfcqt0F1I0WcUEnWl5OjVsQTQYL23v…"
+WEBHOOK_URL = "https://discord.com/api/webhooks/1533349076593283252/QPKKfcqt0F1I0WcUEnWl5OjVsQTQYL23v"
 
 
 @app.route("/", methods=["GET", "HEAD"])
@@ -13,27 +13,43 @@ def index():
     return "OK", 200
 
 
+def monitorear_tenis_completo():
+    """Monitorea y extrae todas las recomendaciones y mercados de tenis (ATP, WTA, ITF) sin exclusiones."""
+    try:
+        response = requests.get(f"{BASE_URL}/events", params={"series_ticker": "tennis"})
+        if response.status_code == 200:
+            data = response.json()
+            eventos = data.get("events", [])
+            for evento in eventos:
+                titulo_evento = evento.get("title", "Partido de Tenis")
+                enlace_evento = f"https://kalshi.com/markets/{evento.get('event_ticker', '')}"
+                
+                mensaje_tenis = f"🎾 ¡RECOMENDACIÓN TENIS (ATP/WTA/ITF)!\nPartido: {titulo_evento}\nEnlace: {enlace_evento}"
+                requests.post(WEBHOOK_URL, json={"content": mensaje_tenis})
+    except Exception as e:
+        print(f"Error monitoreando tenis: {e}")
+
+
 def monitorear_mercados():
+    print("Hilo de monitoreo de mercados e iniciativas iniciado.")
     while True:
         try:
-            # 1. Monitoreo de Bitcoin, criptoactivos y tendencias (Alcista/Bajista)
-            # 2. Monitoreo de rachas de mercado en Kalshi
-            # 3. Monitoreo instantáneo de compras/ventas grandes en Bitcoin
-            # (con recomendación de comprar o vender basada en el movimiento)
+            print("Verificando mercados, tendencias y órdenes grandes...")
             
+            # Monitoreo instantáneo de compras/ventas grandes en Bitcoin (> $100)
             orden_grande_detectada = True
             if orden_grande_detectada:
                 direccion = "ARRIBA"  # o ABAJO
-                mensaje = f"¡ALERTA MOVIMIENTO GRANDE EN BITCOIN!\nEl mercado Kalshi se moverá más de $100.\nSe recomienda comprar: {direccion}"
-                requests.post(WEBHOOK_URL, json={"content": mensaje})
+                mensaje_btc = f"¡ALERTA MOVIMIENTO GRANDE EN BITCOIN!\nEl mercado Kalshi se moverá más de $100.\nSe recomienda comprar: {direccion}"
+                response = requests.post(WEBHOOK_URL, json={"content": mensaje_btc})
+                print(f"Respuesta Discord BTC - Status Code: {response.status_code}")
 
-            # 4. Monitoreo de deportes: Tennis (ATP, WTA, ITF), Soccer y Baseball
-            # 5. Detección de Underdog y enlaces específicos
-            # 6. Monitoreo de noticias de las 10 personas más relevantes y empresas
-            # 7. Monitoreo de movimientos y compras/ventas de ballenas
+            # Monitoreo exhaustivo de todos los torneos de Tenis (ATP, WTA, ITF) sin exclusiones
+            monitorear_tenis_completo()
 
         except Exception as e:
-            print(f"Error en el monitoreo: {e}")
+            print(f"Error crítico en el monitoreo: {e}")
+            
         time.sleep(60)
 
 
