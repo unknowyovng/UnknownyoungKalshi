@@ -49,37 +49,29 @@ def generar_mensaje_apuestas(underdog_realista, favorito_convertido):
 def monitor_kalshi_bitcoin():
     """
     Monitorea los contratos de Bitcoin en Kalshi para lapsos de 15 minutos y 1 hora.
-    Toma el precio exacto con un retraso de 1 a 2 segundos para mayor precisión 
-    del cierre anterior y analiza tendencias de 2 contratos consecutivos.
     """
-    # Lógica de conexión WebSocket con Coinbase y verificación de precios de cierre en Kalshi
     pass
 
 def monitor_news_and_social():
     """
-    Monitorea noticieros de EE.UU. y el mundo sobre bolsa, oro y criptomonedas,
-    así como las redes sociales de las 10 empresas y 10 personas influyentes recomendadas.
+    Monitorea noticieros y redes sociales.
     """
     pass
 
 def monitor_whales():
     """
-    Monitorea transacciones de ballenas y determina la dirección (compra/venta)
-    para dictar si el mercado se mueve al alza o a la baja.
+    Monitorea transacciones de ballenas.
     """
     pass
 
 def monitor_sports_odds():
     """
-    Monitorea todos los deportes en Kalshi (tenis femenino con máxima prioridad, 
-    tenis masculino, tenis de mesa, béisbol, básquetbol, fútbol, boxeo, artes marciales).
-    Detecta anomalías en las probabilidades, favoritos que empiezan perdiendo pero ganan,
-    y oportunidades en underdogs especificando el nombre exacto del equipo o jugador 
-    y líneas extendidas (over/under de innings, sets, goles, puntos).
+    Monitorea deportes y emite alertas de anomalías y underdogs.
     """
     pass
 
 def bot_main_loop():
+    print(">>> Núcleo del bot de señales iniciado correctamente.")
     while True:
         try:
             # Ejecución secuencial de los sistemas de monitoreo avanzados
@@ -87,11 +79,6 @@ def bot_main_loop():
             monitor_news_and_social()
             monitor_whales()
             monitor_sports_odds()
-            
-            # Ejemplos de alertas integradas:
-            # - "Alerta: Comprar Underdog - [Nombre del Jugador/Equipo] (Línea: +8.5 innings / más de 2 sets / Over 2.5 goles)"
-            # - "Alerta Ballena: Compra detectada. Dirección del mercado: MOVERSE HACIA ARRIBA."
-            # - "Tendencia detectada en Kalshi (Bitcoin 15m/1h): Bajista."
             
         except Exception as e:
             print(f"Error en el ciclo del bot: {e}")
@@ -104,5 +91,11 @@ if __name__ == "__main__":
     server_thread.daemon = True
     server_thread.start()
     
-    # Iniciar el núcleo principal del bot con todas las especificaciones solicitadas
-    bot_main_loop()
+    # Iniciar el núcleo principal del bot de forma concurrente para que no bloquee el servidor web
+    bot_thread = threading.Thread(target=bot_main_loop)
+    bot_thread.daemon = True
+    bot_thread.start()
+
+    # Mantener vivo el hilo principal
+    while True:
+        time.sleep(10)
