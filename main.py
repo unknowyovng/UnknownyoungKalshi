@@ -8,24 +8,23 @@ from datetime import datetime, timedelta
 from flask import Flask
 
 # ==========================================
-# CONFIGURACIÓN DEL SERVIDOR WEB (PARA RENDER)
+# CONFIGURACIÓN DEL SERVIDOR WEB (RENDER WEB SERVICE)
 # ==========================================
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot Kalshi 15M activo y escuchando mercado.", 200
+    return "Bot Kalshi 15M activo y escuchando mercado BTC.", 200
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
 
 # ==========================================
 # CONFIGURACIÓN Y PARÁMETROS GLOBALES
 # ==========================================
-# Reemplaza la siguiente cadena con tu URL activa de Webhook de Discord
-DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/TU_WEBHOOK_ACTIVO_AQUI"
+DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1533349076593283252/QPKKfcqt0F1I0WcUEnwI5GjVsQTQYL23BvX8F0YM1p4laseCH0iDNPhdfd0VApHafggJ"
 COINBASE_WS_URL = "wss://ws-feed.exchange.coinbase.com"
 
 # Estrategia y Filtros
@@ -97,7 +96,7 @@ def evaluar_volatilidad_1h(precio_actual):
     variacion_pct = ((max_p - min_p) / min_p) * 100
 
     if variacion_pct > FILTRO_VOLATILIDAD_1H_PCT:
-        return False  # Volatilidad excesiva
+        return False  # Volatilidad excessive
     return True
 
 
@@ -176,9 +175,16 @@ async def procesar_websocket():
                         if tamano_btc >= VOLUMEN_BALLENA_MIN:
                             tipo_operacion = "COMPRA" if side == "buy" else "VENTA"
                             emoji = "🐋🟢" if side == "buy" else "🐋🔴"
+                            
+                            # Cálculo del impacto estimado ($20-$40 por cada BTC de la orden)
+                            min_impacto = int(tamano_btc * 20)
+                            max_impacto = int(tamano_btc * 40)
+                            direccion = "subirá" if side == "buy" else "bajará"
+                            
                             alerta_ballena = (
                                 f"{emoji} **MOVIMIENTO DE BALLENA DETECTADO**\n"
-                                f"**Monto**: {tamano_btc:.2f} BTC (~${tamano_btc * precio:,.2f} USD)\n"
+                                f"**Monto**: {tamano_btc:.2f} BTC (~${tamano_btc * precio:,.2f} USD) "
+                                f"*(estimado: {direccion} aprox ${min_impacto}-${max_impacto} USD en los próximos minutos)*\n"
                                 f"**Tipo**: {tipo_operacion} a ${precio:,.2f}"
                             )
                             enviar_alerta_discord(alerta_ballena)
@@ -189,11 +195,19 @@ async def procesar_websocket():
 
 
 # ==========================================
-# PUNTO DE ENTRADA
+# INICIO DE EJECUCIÓN PARALELA
 # ==========================================
-if __name__ == "__main__":
-    # Iniciar servidor Flask en un hilo secundario para mantener el puerto activo en Render
-    threading.Thread(target=run_flask, daemon=True).start()
+def iniciar_loop_async():
+    """Ejecuta el loop de asyncio para el WebSocket en un hilo dedicado."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    enviar_alerta_discord("🤖 **Bot Kalshi 15M activo en Web Service de Render.**")
+    loop.run_until_complete(procesar_websocket())
 
-    enviar_alerta_discord("🤖 **Bot Kalshi 15M desplegado correctamente con servidor HTTP activo.**")
-    asyncio.run(procesar_websocket())
+if __name__ == "__main__":
+    # 1. Iniciar el WebSocket en un hilo secundario
+    t = threading.Thread(target=iniciar_loop_async, daemon=True)
+    t.start()
+
+    # 2. Iniciar Flask en el hilo principal para responder al Health Check de Render inmediatamente
+    run_flask()
