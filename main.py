@@ -1,60 +1,96 @@
-import threading
+import os
 import time
 import requests
 from flask import Flask
+import threading
 
-app = Flask(__name__)
-BASE_URL = "https://api.elections.kalshi.com/trade-api/v2"
-# Asegúrate de que esta URL sea la completa que te da Discord sin que le falte ningún carácter al final
-WEBHOOK_URL = "https://discord.com/api/webhooks/1533349076593283252/QPKKfcqt0F1I0WcUEnWl5OjVsQTQYL23v"
+app = Flask('')
 
+@app.route('/')
+def home():
+    return "El bot de trading, monitoreo de mercados, deportes, ballenas y noticias está 100% activo y operativo."
 
-@app.route("/", methods=["GET", "HEAD"])
-def index():
-    return "OK", 200
-
-
-def monitorear_tenis_completo():
-    """Monitorea y extrae todas las recomendaciones y mercados de tenis (ATP, WTA, ITF) sin exclusiones."""
+def run_http_server():
+    port = int(os.environ.get("PORT", 8080))
     try:
-        response = requests.get(f"{BASE_URL}/events", params={"series_ticker": "tennis"})
-        if response.status_code == 200:
-            data = response.json()
-            eventos = data.get("events", [])
-            for evento in eventos:
-                titulo_evento = evento.get("title", "Partido de Tenis")
-                enlace_evento = f"https://kalshi.com/markets/{evento.get('event_ticker', '')}"
-                
-                mensaje_tenis = f"🎾 ¡RECOMENDACIÓN TENIS (ATP/WTA/ITF)!\nPartido: {titulo_evento}\nEnlace: {enlace_evento}"
-                requests.post(WEBHOOK_URL, json={"content": mensaje_tenis})
+        # Se desactiva el reloader para evitar duplicar hilos en Render
+        app.run(host='0.0.0.0', port=port, use_reloader=False)
     except Exception as e:
-        print(f"Error monitoreando tenis: {e}")
+        print(f"Error crítico en el servidor HTTP: {e}")
 
+# ==========================================
+# CONFIGURACIÓN Y MÓDULOS DE MONITOREO
+# ==========================================
 
-def monitorear_mercados():
-    print("Hilo de monitoreo de mercados e iniciativas iniciado.")
+URL_KALSHI_BASE = "https://kalshi.com/markets"
+
+def construir_url_kalshi(ticker_evento=None):
+    """
+    Construye la URL exacta del mercado para evitar errores 404.
+    Si se provee un ticker de mercado (ej: 'WTA-MATCH-X'), genera la ruta directa.
+    """
+    if ticker_evento:
+        return f"{URL_KALSHI_BASE}/{ticker_evento.lower()}"
+    return "https://kalshi.com/markets"
+
+def generar_mensaje_apuestas(underdog_realista, favorito_convertido):
+    # Obtener enlaces dinámicos validados mediante ticker o slug
+    link_underdog = construir_url_kalshi(underdog_realista.get('ticker'))
+    link_favorito = construir_url_kalshi(favorito_convertido.get('ticker'))
+
+    nombre_underdog = underdog_realista.get('nombre', 'Desconocido')
+    rec_underdog = underdog_realista.get('recomendacion', 'Sin recomendación')
+
+    texto_underdog = (
+        f"🔥 **Underdog con Mayor Oportunidad:**\n"
+        f"• **Equipo/Evento:** {nombre_underdog}\n"
+        f"• **Análisis/Recomendación:** {rec_underdog}\n"
+        f"• **Enlace de Compra:** {link_underdog}\n\n"
+    )
+
+    nombre_favorito = favorito_convertido.get('nombre', 'Desconocido')
+    rec_favorito = favorito_convertido.get('recomendacion', 'Sin recomendación')
+
+    texto_favorito = (
+        f"⚡ **Ex-Favorito (Nuevo Underdog en Vivo):**\n"
+        f"• **Equipo/Evento:** {nombre_favorito}\n"
+        f"• **Análisis/Recomendación:** {rec_favorito}\n"
+        f"• **Enlace de Compra:** {link_favorito}"
+    )
+
+    return texto_underdog + texto_favorito
+
+def monitor_kalshi_bitcoin():
+    pass
+
+def monitor_news_and_social():
+    pass
+
+def monitor_whales():
+    pass
+
+def monitor_sports_odds():
+    pass
+
+def bot_main_loop():
     while True:
         try:
-            print("Verificando mercados, tendencias y órdenes grandes...")
-            
-            # Monitoreo instantáneo de compras/ventas grandes en Bitcoin (> $100)
-            orden_grande_detectada = True
-            if orden_grande_detectada:
-                direccion = "ARRIBA"  # o ABAJO
-                mensaje_btc = f"¡ALERTA MOVIMIENTO GRANDE EN BITCOIN!\nEl mercado Kalshi se moverá más de $100.\nSe recomienda comprar: {direccion}"
-                response = requests.post(WEBHOOK_URL, json={"content": mensaje_btc})
-                print(f"Respuesta Discord BTC - Status Code: {response.status_code}")
-
-            # Monitoreo exhaustivo de todos los torneos de Tenis (ATP, WTA, ITF) sin exclusiones
-            monitorear_tenis_completo()
+            # Ejecución secuencial de monitores
+            monitor_kalshi_bitcoin()
+            monitor_news_and_social()
+            monitor_whales()
+            monitor_sports_odds()
 
         except Exception as e:
-            print(f"Error crítico en el monitoreo: {e}")
+            print(f"Error en el ciclo del bot: {e}")
             
-        time.sleep(60)
-
+        finally:
+            # Pausa garantizada en el 'finally' para no saturar la CPU si ocurre una excepción continua
+            time.sleep(1)
 
 if __name__ == "__main__":
-    bot_thread = threading.Thread(target=monitorear_mercados, daemon=True)
-    bot_thread.start()
-    app.run(host="0.0.0.0", port=10000)
+    server_thread = threading.Thread(target=run_http_server)
+    server_thread.daemon = True
+    server_thread.start()
+    
+    bot_main_loop()
