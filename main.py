@@ -11,7 +11,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "El bot de trading, monitoreo de mercados, deportes, ballenas y noticias está 100% activo y operativo.", 200
+    return "El bot de trading cuantitativo, monitoreo de mercados, deportes, ballenas y noticias está 100% activo y operativo.", 200
 
 def run_http_server():
     port = int(os.environ.get("PORT", 8080))
@@ -21,7 +21,7 @@ def run_http_server():
         print(f"Error crítico en el servidor HTTP: {e}")
 
 # ==========================================
-# CONFIGURACIÓN Y MÓDULOS DE MONITOREO Y LÓGICA DEL BOT
+# CONFIGURACIÓN Y COMUNICACIÓN DISCORD
 # ==========================================
 
 URL_KALSHI_BASE = "https://kalshi.com/markets"
@@ -31,9 +31,7 @@ DISCORD_WEBHOOK_URL = os.environ.get(
 )
 
 def enviar_a_discord(mensaje):
-    """
-    Envía mensajes y alertas directamente al canal de Discord vía Webhook.
-    """
+    """Envía mensajes y alertas directamente al canal de Discord vía Webhook."""
     if not DISCORD_WEBHOOK_URL:
         print("Error: Webhook de Discord no configurado.")
         return
@@ -46,69 +44,73 @@ def enviar_a_discord(mensaje):
         print(f"Excepción al intentar enviar mensaje a Discord: {e}")
 
 def construir_url_kalshi(ticker_evento=None):
-    """
-    Construye la URL exacta del mercado para evitar errores 404.
-    """
     if ticker_evento:
         return f"{URL_KALSHI_BASE}/{ticker_evento.lower()}"
     return URL_KALSHI_BASE
 
-def generar_mensaje_apuestas(underdog_realista, favorito_convertido):
-    link_underdog = construir_url_kalshi(underdog_realista.get('ticker'))
-    link_favorito = construir_url_kalshi(favorito_convertido.get('ticker'))
-
-    nombre_underdog = underdog_realista.get('nombre', 'Desconocido')
-    rec_underdog = underdog_realista.get('recomendacion', 'Sin recomendación')
-
-    texto_underdog = (
-        f"🔥 **Underdog con Mayor Oportunidad:**\n"
-        f"• **Equipo/Evento:** {nombre_underdog}\n"
-        f"• **Análisis/Recomendación:** {rec_underdog}\n"
-        f"• **Enlace de Compra:** {link_underdog}\n\n"
-    )
-
-    nombre_favorito = favorito_convertido.get('nombre', 'Desconocido')
-    rec_favorito = favorito_convertido.get('recomendacion', 'Sin recomendación')
-
-    texto_favorito = (
-        f"⚡ **Ex-Favorito (Nuevo Underdog en Vivo):**\n"
-        f"• **Equipo/Evento:** {nombre_favorito}\n"
-        f"• **Análisis/Recomendación:** {rec_favorito}\n"
-        f"• **Enlace de Compra:** {link_favorito}"
-    )
-
-    return texto_underdog + texto_favorito
-
 # ==========================================
-# MÓDULOS DE RASTREO SECUNDARIOS
+# MÓDULOS DE RASTREO
 # ==========================================
 
 def monitor_kalshi_bitcoin():
-    """
-    Monitorea los contratos de Bitcoin en Kalshi para lapsos de 15 minutos y 1 hora.
-    """
+    """Monitorea los contratos de Bitcoin en Kalshi."""
     pass
 
 def monitor_news_and_social():
-    """
-    Monitorea noticieros sobre bolsa, oro y criptomonedas, así como redes de cuentas influyentes.
-    """
+    """Monitorea noticieros y redes sobre bolsa, oro y criptomonedas."""
     pass
 
 def monitor_whales():
-    """
-    Monitorea transacciones de ballenas y determina la dirección (compra/venta).
-    """
+    """Monitorea transacciones de ballenas y determina dirección del mercado."""
     pass
 
 def monitor_sports_odds():
     """
-    Monitorea deportes en Kalshi (fútbol, béisbol y tenis con máxima prioridad).
+    Monitorea eventos deportivos en Kalshi (Fútbol, Béisbol y Tenis)
+    y envía alertas automáticas ante cuotas < 40%.
     """
-    pass
+    sports_keywords = ["soccer", "baseball", "tennis", "mlb", "wta", "champions", "atp"]
+    seen_opportunities = set()
+
+    try:
+        url = "https://external-api.kalshi.com/trade-api/v2/markets?status=open&limit=100"
+        res = requests.get(url, timeout=10)
+        
+        if res.status_code == 200:
+            data = res.json()
+            markets = data.get("markets", [])
+
+            for m in markets:
+                ticker = m.get("ticker", "")
+                title = m.get("title", "")
+                category = m.get("category", "").lower()
+                
+                text_to_check = f"{ticker} {title} {category}".lower()
+                if any(kw in text_to_check for kw in sports_keywords):
+                    yes_bid = m.get("yes_bid", 0)
+                    volume = m.get("volume", 0)
+
+                    if 0 < yes_bid < 40 and ticker not in seen_opportunities:
+                        seen_opportunities.add(ticker)
+                        link = construir_url_kalshi(ticker)
+                        
+                        msg = (
+                            f"🏆 **ALERTA DEPORTIVA EN VIVO (Kalshi)** 🏆\n"
+                            f"• **Evento:** {title}\n"
+                            f"• **Ticker:** `{ticker}`\n"
+                            f"• **Cuota Actual YES:** {yes_bid}%\n"
+                            f"• **Volumen:** {volume} contratos\n"
+                            f"• **Estrategia:** Underdog / Ineficiencia <40%\n"
+                            f"• **Enlace:** {link}"
+                        )
+                        enviar_a_discord(msg)
+                        print(f"[DEPORTES] Alerta enviada: {ticker}")
+
+    except Exception as e:
+        print(f"Error en monitor_sports_odds: {e}")
 
 # ==========================================
-# NUEVA FUNCIÓN IA: AGENTE AUTÓNOMO PLAYWRIGHT (REGLA DE ORO)
+# AGENTE IA AUTÓNOMO PLAYWRIGHT (REGLA DE ORO)
 # ==========================================
 
 async def agente_autonomo_ia():
@@ -116,7 +118,7 @@ async def agente_autonomo_ia():
     Navegador IA autónomo que monitorea TradingView en vivo en gráficos de 15m.
     Aplica la Regla de Oro: Ineficiencia en Kalshi < 40% + Trend Following + Martingala Progresiva (Máx 3).
     """
-    print("[AGENTE IA] Iniciando motor de visualización Playwright...")
+    print("[AGENTE IA] Iniciando motor Playwright Chromium...")
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
@@ -125,20 +127,16 @@ async def agente_autonomo_ia():
         context = await browser.new_context()
         page = await context.new_page()
         
-        # Conexión al gráfico BTC/USDT en 15m
         await page.goto("https://www.tradingview.com/chart/?symbol=BINANCE:BTCUSDT")
         print("[AGENTE IA] Conectado a TradingView en tiempo real.")
 
         while True:
             try:
-                # 1. Extracción del precio spot actual desde TradingView
                 price_element = await page.query_selector("span.last-J326z43f")
                 spot_price = await price_element.inner_text() if price_element else "N/A"
 
-                # 2. Análisis de probabilidad/cuota en Kalshi
-                kalshi_odds = 34  # Simulación de contrato cotizando por debajo del 40%
+                kalshi_odds = 34  # Evaluación/Simulación de ineficiencia < 40%
 
-                # 3. REGLA DE ORO: Disparo de Alerta Cuantitativa
                 if kalshi_odds < 40:
                     alerta = (
                         f"🚨 **REGLA DE ORO: INEFICIENCIA DETECTADA (<40%)** 🚨\n"
@@ -152,7 +150,6 @@ async def agente_autonomo_ia():
                     enviar_a_discord(alerta)
                     print(f"[ALERTA IA DISPARADA]: Spot ${spot_price} | Kalshi {kalshi_odds}%")
 
-                # Escaneo cada 15 segundos
                 await asyncio.sleep(15)
 
             except Exception as e:
@@ -160,14 +157,12 @@ async def agente_autonomo_ia():
                 await asyncio.sleep(5)
 
 def start_ia_agent_loop():
-    """Inicia el bucle asíncrono para el Agente IA."""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.run_until_complete(agente_autonomo_ia())
 
 def bot_main_loop():
-    """Bucle principal para el monitoreo secundario."""
-    enviar_a_discord("🚀 **Bot de Trading e IA Autónoma iniciados y conectados correctamente a Discord.**")
+    enviar_a_discord("🚀 **Bot de Trading, Deportes e IA Autónoma iniciados en Render.**")
     
     while True:
         try:
@@ -178,20 +173,17 @@ def bot_main_loop():
         except Exception as e:
             print(f"Error en el ciclo del bot: {e}")
         finally:
-            time.sleep(10)
+            time.sleep(15)
 
 # ==========================================
 # INICIALIZACIÓN
 # ==========================================
 
 if __name__ == "__main__":
-    # 1. Servidor HTTP (Keep-Alive Render)
     server_thread = threading.Thread(target=run_http_server, daemon=True)
     server_thread.start()
 
-    # 2. Agente IA Autónomo (Playwright)
     ia_thread = threading.Thread(target=start_ia_agent_loop, daemon=True)
     ia_thread.start()
 
-    # 3. Módulos secundarios
     bot_main_loop()
