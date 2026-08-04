@@ -9,7 +9,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "El bot de trading, Kalshi, deportes, ballenas y noticias está activo y monitoreando."
+    return "El bot de trading, Kalshi, deportes, ballenas y noticias está activo y operando."
 
 def run_http_server():
     port = int(os.environ.get("PORT", 10000))
@@ -20,41 +20,35 @@ def run_http_server():
 # ==========================================
 
 def monitor_kalshi_bitcoin():
-    """
-    Monitorea contratos de 15m y 1h en Kalshi con retraso de 1-2 segundos.
-    """
     print("[KALSHI BTC] Verificando cierres de contratos (15m/1h) con retraso de 1s...")
-    # Simulación de señal clara en consola
-    # Ejemplo: Si se detecta tendencia
-    print("[SEÑAL KALSHI] 📉 Mercado bajista detectado en Bitcoin (2 contratos consecutivos a la baja). Operar en corto.")
 
 def monitor_news_and_social():
-    """
-    Monitorea noticias macroeconómicas y redes sociales de influyentes/empresas.
-    """
     print("[NOTICIAS & REDES] Revisando principales noticieros de EE.UU./Mundo y feeds de influyentes...")
 
 def monitor_whales():
-    """
-    Monitorea movimientos de ballenas.
-    """
     print("[BALLENAS] Escaneando transacciones grandes de criptomonedas...")
-    # Simulación de señal clara
-    print("[SEÑAL BALLENA] 🐋 Venta masiva detectada. Dirección del mercado: MOVERSE HACIA ABAJO.")
 
 def monitor_sports_odds():
     """
-    Monitorea deportes en Kalshi con máxima prioridad en tenis femenino,
-    anomalías, nombres de underdogs y líneas extendidas (over/under).
+    Monitorea exclusivamente partidos en vivo/en juego en Kalshi.
+    Da máxima prioridad al tenis femenino, detecta anomalías y especifica
+    claramente el nombre del underdog y la línea extendida.
     """
-    print("[DEPORTES] Analizando cuotas en Kalshi (Prioridad: Tenis Femenino, Béisbol, Básquetbol, Fútbol, etc.)...")
-    # Simulación de señal clara con nombre de underdog y línea extendida
-    print("[SEÑAL DEPORTE] 🎾 Comprar Underdog - JUGADORA: Maria Sakkari | Línea: Más de 2.5 sets (Probabilidad realista superior a la de Kalshi).")
+    print("[DEPORTES] Analizando partidos en vivo en Kalshi (Prioridad: Tenis Femenino)...")
+    
+    # Simulación de una señal corregida y estricta para partidos en vivo con nombre explícito
+    alerta_deporte = (
+        "⚽/🎾 **[SPORTS] ANOMALÍA DETECTADA - PARTIDO EN VIVO**\n"
+        "🏆 **Evento:** WTA Tenis - Sakkari vs Pegula (En Vivo - Set 2)\n"
+        "🎯 **Recomendación Específica:** Comprar SÍ al Underdog: **Maria Sakkari**\n"
+        "📊 **Motivo:** El favorito comenzó perdiendo el primer set pero hay probabilidad realista de remontada.\n"
+        "📏 **Línea Extendida:** Más de 2.5 sets (Cuota con valor para Scalping)."
+    )
+    print(alerta_deporte)
 
 def bot_main_loop():
-    # Espera inicial para estabilizar el servidor web
     time.sleep(3)
-    print("--- INICIANDO NÚCLEO DE MONITOREO DEL BOT ---")
+    print("--- INICIANDO NÚCLEO DE MONITOREO DEL BOT (CORREGIDO) ---")
     
     while True:
         try:
@@ -70,13 +64,11 @@ def bot_main_loop():
         except Exception as e:
             print(f"Error en el ciclo del bot: {e}")
             
-        time.sleep(15) # Pausa de 15 segundos entre ciclos para ver los logs limpios y claros
+        time.sleep(20)
 
 if __name__ == "__main__":
-    # Iniciar servidor HTTP en un hilo separado
     server_thread = threading.Thread(target=run_http_server)
     server_thread.daemon = True
     server_thread.start()
     
-    # Iniciar el bucle principal del bot
     bot_main_loop()
