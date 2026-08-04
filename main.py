@@ -51,7 +51,6 @@ def check_live_sports_signals(match_data):
     Filtra solo juegos en vivo (excluyendo tardíos o finalizados) y emite recomendaciones
     incluyendo el nombre del equipo/jugador (marcando si es Underdog) y el link directo.
     """
-    # match_data['status'] debe ser 'LIVE'
     if match_data.get("status") == "LIVE":
         sport = match_data.get("sport") # Tenis, Soccer, Béisbol
         competitor = match_data.get("name")
@@ -66,6 +65,33 @@ def check_live_sports_signals(match_data):
             f"🔗 [Enlace directo al juego]({game_link})"
         )
         send_discord_alert(message)
+
+# --- MÓDULO 4: Escaneo Inteligente de Criptomonedas en Tendencia ---
+def check_trending_crypto():
+    """
+    Detecta otras monedas que están teniendo relevancia en el mercado para tomar profit.
+    """
+    # Simulación de escaneo de tokens con alta tendencia/volumen
+    pass
+
+# --- MÓDULO 5: Análisis de Oro en Kalshi (Lapso de 1 hora) ---
+def analyze_gold_kalshi(current_gold_price, target_price):
+    """
+    Da recomendación de comprar alcista o bajista en la moneda de oro 
+    para contratos en Kalshi en un lapso de 1 hora.
+    """
+    difference = current_gold_price - target_price
+    if difference > 0:
+        direction = "ALCISTA (Por encima del target)"
+    else:
+        direction = "BAJISTA (Por debajo del target)"
+        
+    message = (
+        f"🥇 **ANÁLISIS DE ORO (KALSHI - 1 HORA)** 🥇\n"
+        f"Recomendación de contrato: **{direction}**\n"
+        f"Precio Actual del Oro: ${current_gold_price:.2f} | Target: ${target_price:.2f}"
+    )
+    send_discord_alert(message)
 
 @app.route("/", methods=["POST"])
 def webhook_listener():
