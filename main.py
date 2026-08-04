@@ -54,12 +54,9 @@ def send_discord_alert(title, details, alert_type="INFO"):
         print(f"Error enviando mensaje a Discord: {e}")
 
 # ---------------------------------------------------------
-# 3. FUNCIONES AUXILIARES PARA CUOTAS Y RECOMENDACIONES
+# 3. FUNCIONES AUXILIARES PARA CUOTAS Y FILTROS
 # ---------------------------------------------------------
 def calculate_odds(prob_percent):
-    """
-    Calcula la cuota decimal y americana a partir del porcentaje.
-    """
     if prob_percent <= 0:
         return "N/A", "N/A"
     
@@ -75,66 +72,46 @@ def calculate_odds(prob_percent):
     return decimal_odds, american_str
 
 def analyze_sports_recommendation(title, last_price):
-    """
-    Analiza la especificación de la apuesta y genera recomendación detallada para Scalping.
-    """
     title_lower = title.lower()
     
-    # 1. Béisbol (Carreras / Runs)
     if "runs" in title_lower or "carreras" in title_lower or "mlb" in title_lower:
         rec_type = "BÉISBOL (CARRERAS)"
-        if "over" in title_lower or "más de" in title_lower or "above" in title_lower:
-            pick = "MÁS DE 8.5 CARRERAS" if last_price <= 25 else "BAJO DE 8.5 CARRERAS"
-        elif "under" in title_lower or "menos de" in title_lower or "below" in title_lower:
-            pick = "BAJO DE 8.5 CARRERAS" if last_price <= 25 else "MÁS DE 8.5 CARRERAS"
-        else:
-            pick = "Entrada de Valor en Mercado de Carreras (Underdog)"
-
-    # 2. Fútbol / Soccer (Goles)
+        pick = "MÁS DE 8.5 CARRERAS" if last_price <= 25 else "BAJO DE 8.5 CARRERAS"
     elif "goals" in title_lower or "goles" in title_lower or "soccer" in title_lower:
         rec_type = "FÚTBOL (GOLES)"
-        if "2.5" in title_lower:
-            pick = "MÁS DE 2.5 GOLES" if last_price <= 25 else "BAJO DE 2.5 GOLES"
-        elif "3.5" in title_lower:
-            pick = "BAJO DE 3.5 GOLES" if last_price <= 25 else "MÁS DE 3.5 GOLES"
-        else:
-            pick = "Apostar a Cuota Alta en Línea de Goles"
-
-    # 3. Tenis (Sets)
+        pick = "MÁS DE 2.5 GOLES" if last_price <= 25 else "BAJO DE 2.5 GOLES"
     elif "sets" in title_lower or "tennis" in title_lower or "tenis" in title_lower:
         rec_type = "TENIS (SETS)"
-        if "3" in title_lower:
-            pick = "MÁS DE / BAJO DE 3 SETS (Estrategia Scalping)"
-        elif "5" in title_lower or "4" in title_lower:
-            pick = "BAJO DE 4.5 SETS" if last_price <= 25 else "MÁS DE 3.5 SETS"
-        else:
-            pick = "Entrada en Sets a Favor del Underdog"
-
-    # 4. Ganador directo / Underdog (Ideal para scalping en vivo)
+        pick = "MÁS DE / BAJO DE 3 SETS (Estrategia Scalping)"
     else:
         rec_type = "GANADOR DIRECTO / ANOMALÍA EN VIVO"
-        if last_price <= 28:
-            pick = "COMPRAR SÍ (Underdog con valor alto 🎯 - Excelente para Scalping)"
-        else:
-            pick = "COMPRAR NO (Favorito Sobrevalorado)"
+        pick = "COMPRAR SÍ (Underdog con valor alto 🎯 - Excelente para Scalping)"
 
     return rec_type, pick
 
+def contains_long_term_years(title):
+    """
+    Filtro de seguridad por texto ultra estricto: Bloquea cualquier mercado a largo plazo,
+    menciones de años futuros (2027 en adelante) o frases de torneos a varios años ("before").
+    """
+    title_lower = title.lower()
+    forbidden_terms = [
+        "2027", "2028", "2029", "2030", "2031", "2032", "2033", "2034", "2035",
+        "before", "to win a", "championships", "career", "season total"
+    ]
+    for term in forbidden_terms:
+        if term in title_lower:
+            return True
+    return False
+
 def is_within_max_hours(date_string, max_hours=48):
-    """
-    Valida la fecha de expiración. Si no hay fecha (None), retorna True 
-    para permitir evaluar partidos en vivo cuya fecha exacta no expone la API.
-    Si trae fecha, rechaza estrictamente lo que pase de 48 horas (ej. 2027, 2030).
-    """
     if not date_string:
         return True
     try:
         clean_date = date_string.replace("Z", "+00:00")
         event_date = datetime.fromisoformat(clean_date)
-        
         now = datetime.now(timezone.utc)
         max_limit = now + timedelta(hours=max_hours)
-        
         return (now - timedelta(hours=6)) <= event_date <= max_limit
     except Exception:
         return True
@@ -145,9 +122,6 @@ def is_within_max_hours(date_string, max_hours=48):
 KALSHI_API_URL = "https://api.elections.kalshi.com/v1/events"
 
 def scan_kalshi_markets():
-    """
-    Escanea mercados de Kalshi buscando eventos de Bitcoin y anomalías en Deportes en vivo / corto plazo.
-    """
     try:
         response = requests.get(
             KALSHI_API_URL,
@@ -171,12 +145,15 @@ def scan_kalshi_markets():
             if not markets:
                 continue
 
+            # --- FILTRO ANTICIPADO POR TÍTULO (BLOQUEA AÑOS Y LARGO PLAZO) ---
+            if contains_long_term_years(title):
+                continue
+
             market = markets[0]
             last_price = market.get("last_price", 0)
 
-            # --- FILTRO TEMPORAL INTELIGENTE ---
+            # --- FILTRO TEMPORAL POR FECHA ---
             expiration_time = market.get("expiration_time") or market.get("close_time") or event.get("mutually_exclusive_expiration_date")
-            
             if not is_within_max_hours(expiration_time, max_hours=48):
                 continue
 
@@ -202,9 +179,10 @@ def scan_kalshi_markets():
                 )
                 send_discord_alert(f"Predicción Bitcoin {timeframe}", details, alert_type=alert_tag)
 
-            # --- Detector de Anomalías en Deportes (En Vivo y Próximos) ---
+            # --- Detector de Anomalías en Deportes (SOLO UNDERDOGS / VALOR BAJO PARA SCALPING) ---
             elif "SPORT" in category or "GAME" in category or "MATCH" in category or "SERIES" in category:
-                if 0 < last_price <= 28 or last_price >= 80:
+                # RESTRINGIDO SOLO A PRECIOS BAJOS (0 a 28%). Se elimina el >= 80 para evitar favoritos lejanos masivos.
+                if 0 < last_price <= 28:
                     dec_odds, amer_odds = calculate_odds(last_price)
                     rec_category, pick_recommendation = analyze_sports_recommendation(title, last_price)
                     
@@ -238,9 +216,6 @@ TOP_10_COMPANIES = [
 ]
 
 def scan_influential_news():
-    """
-    Rastrea noticias y menciones clave que pueden impactar la dirección del mercado.
-    """
     summary = (
         f"**Búsqueda de impacto en curso para:**\n"
         f"- **Personas Clave:** {', '.join(TOP_10_PEOPLE[:5])}...\n"
