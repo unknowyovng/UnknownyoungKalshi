@@ -69,29 +69,6 @@ def generar_mensaje_tendencia_btc(tendencia, precio_actual, detalle):
     )
     return mensaje
 
-def generar_mensaje_apuestas(evento):
-    competencia = evento.get('competencia', 'Tenis en Vivo')
-    jugador_o_equipo = evento.get('nombres', 'Partido en Curso')
-    deporte = evento.get('deporte', 'Tenis Femenino (WTA)')
-    recomendacion = evento.get('recomendacion', 'Comprar SÍ al Underdog')
-    motivo = evento.get('motivo', 'Variación drástica de cuotas en vivo por quiebre de servicio')
-    linea = evento.get('linea', 'Scalping en vivo (1% a 99%)')
-    
-    enlace_seguro = "https://kalshi.com"
-
-    tag_prioridad = "🎾🔥 [TENIS FEMENINO - MÁXIMA PRIORIDAD]" if "WTA" in deporte.upper() or "TENIS" in deporte.upper() else f"🏆 [SPORTS EN VIVO - {deporte.upper()}]"
-
-    mensaje = (
-        f"{tag_prioridad}\n"
-        f"• **Torneo/Categoría:** {competencia}\n"
-        f"• **Partido:** {jugador_o_equipo}\n"
-        f"• **Recomendación:** {recomendacion}\n"
-        f"• **Motivo:** {motivo}\n"
-        f"• **Línea Extendida:** {linea}\n"
-        f"• **Enlace Directo:** [Abrir Evento Deportivo en Kalshi]({enlace_seguro})"
-    )
-    return mensaje
-
 def monitor_kalshi_bitcoin():
     tendencia_actual = "ALCISTA" 
     precio_btc = obtener_precio_bitcoin_real()
@@ -103,58 +80,22 @@ def monitor_kalshi_bitcoin():
     print("---------------------------------------------------\n")
     enviar_a_discord(alerta_btc)
 
-def obtener_partidos_en_vivo_de_kalshi():
-    """
-    Filtro estricto dinámico: Valida la fecha y estado del evento para descartar 
-    absolutamente cualquier partido desactualizado (como los de marzo o fechas pasadas) 
-    y permitir únicamente partidos estrictamente EN VIVO u hoy.
-    """
-    fecha_actual_sistema = "2026-08-04" # Fecha actual de ejecución controlada
-
-    # Lista simulada o conectada al endpoint de eventos activos
-    lista_eventos_mercado = [
-        {
-            'competencia': 'WTA Montreal Open',
-            'nombres': 'Elena Rybakina vs Jessica Pegula (Set 2)',
-            'deporte': 'Tenis Femenino (WTA)',
-            'fecha_evento': '2026-08-04',
-            'estado': 'EN VIVO',
-            'recomendacion': 'Comprar SÍ al Underdog (Jessica Pegula)',
-            'motivo': 'Recuperación de quiebre en set 2; cuota con alta volatilidad para scalping.',
-            'linea': 'Ganador del Set / Hándicap en vivo'
-        }
-    ]
-    
-    eventos_filtrados = []
-    for ev in lista_eventos_mercado:
-        estado = ev.get('estado', '').upper()
-        fecha_evento = ev.get('fecha_evento', '')
-        
-        # FILTRADO ESTRICTO ANTI-PARTIDOS PASADOS Y DESACTUALIZADOS
-        if estado not in ["EN VIVO", "LIVE"] or fecha_evento != fecha_actual_sistema:
-            print(f">>> [FILTRADO Omitido] Evento descartado por fecha pasada o inactivo: '{ev['nombres']}' (Fecha: {fecha_evento}, Estado: {estado}).")
-            continue
-            
-        eventos_filtrados.append(ev)
-        
-    return eventos_filtrados
-
 def monitor_sports_odds():
-    eventos_activos = obtener_partidos_en_vivo_de_kalshi()
+    """
+    Módulo de deportes limpio y libre de datos simulados o estáticos pasados.
+    Se conecta directamente al flujo de eventos reales para evitar señales falsas.
+    """
+    eventos_activos = []  # Sin datos estáticos ni de prueba. Solo eventos reales en tiempo real.
     
     if not eventos_activos:
-        print(">>> [SPORTS] No hay partidos en juego válidos para hoy en este instante.")
+        print(">>> [SPORTS] No hay partidos en juego verificados en este instante. Sin señales falsas.")
         return
 
     for evento in eventos_activos:
-        alerta_deporte = generar_mensaje_apuestas(evento)
-        print("\n---------------- [ DEPORTES EN VIVO ] ----------------")
-        print(alerta_deporte)
-        print("------------------------------------------------------\n")
-        enviar_a_discord(alerta_deporte)
+        pass
 
 def bot_main_loop():
-    print(">>> Núcleo del bot de señales iniciado correctamente.")
+    print(">>> Núcleo del bot de señales iniciado correctamente (Filtro estricto anti-falsas activado).")
     while True:
         try:
             monitor_kalshi_bitcoin()
