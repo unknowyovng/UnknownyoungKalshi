@@ -5,6 +5,7 @@ from flask import Flask
 
 app = Flask(__name__)
 BASE_URL = "https://api.elections.kalshi.com/trade-api/v2"
+# Asegúrate de que esta URL sea la completa que te da Discord sin que le falte ningún carácter al final
 WEBHOOK_URL = "https://discord.com/api/webhooks/1533349076593283252/QPKKfcqt0F1I0WcUEnWl5OjVsQTQYL23v"
 
 
