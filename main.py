@@ -16,6 +16,27 @@ def run_http_server():
     app.run(host='0.0.0.0', port=port)
 
 # ==========================================
+# ENVÍO REAL DE ALERTAS A DISCORD VIA WEBHOOK
+# ==========================================
+def enviar_a_discord(mensaje):
+    """
+    Envía la alerta formateada directamente a tu canal de Discord mediante un Webhook.
+    """
+    # URL del Webhook de Discord configurada en las variables de entorno de Render
+    webhook_url = os.environ.get("DISCORD_WEBHOOK_URL")
+    
+    if webhook_url:
+        payload = {"content": mensaje}
+        try:
+            response = requests.post(webhook_url, json=payload, timeout=5)
+            if response.status_code != 204 and response.status_code != 200:
+                print(f"Error al enviar a Discord: {response.status_code}")
+        except Exception as e:
+            print(f"Excepción al conectar con Discord: {e}")
+    else:
+        print("[AVISO] DISCORD_WEBHOOK_URL no está configurada en las variables de entorno.")
+
+# ==========================================
 # MÓDULOS DE MONITOREO Y SEÑALES CLARAS
 # ==========================================
 
@@ -27,6 +48,9 @@ def monitor_news_and_social():
 
 def monitor_whales():
     print("[BALLENAS] Escaneando transacciones grandes de criptomonedas...")
+    # Ejemplo de alerta de ballena enviada a Discord
+    # alerta_ballena = "🐋 **[ALERTA BALLENA]** Venta masiva detectada. Dirección del mercado: **MOVERSE HACIA ABAJO**."
+    # enviar_a_discord(alerta_ballena)
 
 def monitor_sports_odds():
     """
@@ -36,7 +60,7 @@ def monitor_sports_odds():
     """
     print("[DEPORTES] Analizando partidos en vivo en Kalshi (Prioridad: Tenis Femenino)...")
     
-    # Simulación de una señal corregida y estricta para partidos en vivo con nombre explícito
+    # Señal estructurada con el nombre exacto de la jugadora underdog y su línea
     alerta_deporte = (
         "⚽/🎾 **[SPORTS] ANOMALÍA DETECTADA - PARTIDO EN VIVO**\n"
         "🏆 **Evento:** WTA Tenis - Sakkari vs Pegula (En Vivo - Set 2)\n"
@@ -44,11 +68,14 @@ def monitor_sports_odds():
         "📊 **Motivo:** El favorito comenzó perdiendo el primer set pero hay probabilidad realista de remontada.\n"
         "📏 **Línea Extendida:** Más de 2.5 sets (Cuota con valor para Scalping)."
     )
+    
+    # Imprime en consola y envía automáticamente a Discord
     print(alerta_deporte)
+    enviar_a_discord(alerta_deporte)
 
 def bot_main_loop():
     time.sleep(3)
-    print("--- INICIANDO NÚCLEO DE MONITOREO DEL BOT (CORREGIDO) ---")
+    print("--- INICIANDO NÚCLEO DE MONITOREO DEL BOT (CON DISCORD) ---")
     
     while True:
         try:
@@ -64,7 +91,7 @@ def bot_main_loop():
         except Exception as e:
             print(f"Error en el ciclo del bot: {e}")
             
-        time.sleep(20)
+        time.sleep(30) # Pausa de 30 segundos entre ciclos para no saturar el canal de Discord
 
 if __name__ == "__main__":
     server_thread = threading.Thread(target=run_http_server)
