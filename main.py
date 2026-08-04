@@ -68,7 +68,20 @@ def monitor_sports_odds():
     """
     Monitorea deportes y emite alertas de anomalías y underdogs.
     """
-    pass
+    # Ejemplo de prueba activa para verificar que las señales se emiten en los logs
+    underdog_prueba = {
+        'nombre': 'Maria Sakkari (WTA Tenis)',
+        'recomendacion': 'Comprar SÍ al Underdog con valor para Scalping (Más de 2.5 sets).'
+    }
+    favorito_prueba = {
+        'nombre': 'Partido en Vivo - Set 2',
+        'recomendacion': 'El favorito comenzó perdiendo pero hay probabilidad realista de remontada.'
+    }
+    
+    alerta = generar_mensaje_apuestas(underdog_prueba, favorito_prueba)
+    print("\n----------------------------------------")
+    print(alerta)
+    print("----------------------------------------\n")
 
 def bot_main_loop():
     print(">>> Núcleo del bot de señales iniciado correctamente.")
@@ -83,7 +96,7 @@ def bot_main_loop():
         except Exception as e:
             print(f"Error en el ciclo del bot: {e}")
             
-        time.sleep(1) # Ciclo optimizado en tiempo real
+        time.sleep(10) # Pausa de 10 segundos entre ciclos para evitar saturar los registros
 
 if __name__ == "__main__":
     # Iniciar servidor HTTP en un hilo separado para cumplir con el requisito de Render (Keep-Alive)
