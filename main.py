@@ -1,120 +1,77 @@
 import os
-import time
 import requests
-from flask import Flask
-import threading
+from flask import Flask, request
+from discord_webhook import DiscordWebhook
 
-# Configuración del servidor HTTP (Keep-Alive para Render)
-app = Flask('')
+app = Flask(__name__)
 
-@app.route('/')
-def home():
-    return "El bot de trading, monitoreo de mercados, deportes, ballenas y noticias está 100% activo y operativo."
+# Configuración básica del bot y webhooks
+DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "TU_WEBHOOK_DE_DISCORD")
 
-def run_http_server():
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
+def send_discord_alert(message):
+    """Envía una alerta formateada a Discord."""
+    webhook = DiscordWebhook(url=DISCORD_WEBHOOK_URL, content=message)
+    webhook.execute()
 
-# ==========================================
-# MÓDULOS DE MONITOREO Y LÓGICA DEL BOT
-# ==========================================
-
-DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "")
-
-def enviar_a_discord(mensaje):
-    if not DISCORD_WEBHOOK_URL:
-        print(">>> [ERROR] La variable DISCORD_WEBHOOK_URL está vacía en Render.")
-        return
-
-    payload = {"content": mensaje}
-    try:
-        response = requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=10)
-        print(f">>> [DISCORD] Estado de envío: {response.status_code}")
-    except Exception as e:
-        print(f">>> [EXCEPCIÓN DISCORD] Error al conectar con el Webhook: {e}")
-
-# Variable global para almacenar el precio anterior y detectar la dirección real
-precio_anterior_btc = None
-
-def obtener_precio_bitcoin_real():
-    try:
-        url_coinbase = "https://api.coinbase.com/v2/prices/BTC-USD/spot"
-        response = requests.get(url_coinbase, timeout=5)
-        data = response.json()
-        precio_float = float(data['data']['amount'])
-        return precio_float
-    except Exception as e:
-        print(f"No se pudo obtener el precio en vivo de Coinbase: {e}")
-        return None
-
-def generar_mensaje_tendencia_btc(tendencia, precio_actual, detalle):
-    if tendencia.upper() == "ALCISTA":
-        icono = "🚀"
-        color_texto = "**TENDENCIA ALCISTA DETECTADA (BULLISH)**"
-    else:
-        icono = "📉"
-        color_texto = "**TENDENCIA BAJISTA DETECTADA (BEARISH)**"
-
-    enlace_seguro = "https://kalshi.com"
-
-    mensaje = (
-        f"{icono} **[KALSHI BITCOIN 15M/1H] {color_texto}**\n"
-        f"• **Precio / Activo:** BTC a ${precio_actual:,.2f}\n"
-        f"• **Dirección del Mercado:** {tendencia.upper()}\n"
-        f"• **Análisis Técnico:** {detalle}\n"
-        f"• **Enlace Directo:** [Abrir Mercado BTC en Kalshi]({enlace_seguro})"
-    )
-    return mensaje
-
-def monitor_kalshi_bitcoin():
-    global precio_anterior_btc
-    
-    precio_actual = obtener_precio_bitcoin_real()
-    if precio_actual is None:
-        return
-
-    # Determinar la tendencia real comparando con la lectura anterior
-    if precio_anterior_btc is None:
-        tendencia_actual = "ALCISTA"
-    elif precio_actual >= precio_anterior_btc:
-        tendencia_actual = "ALCISTA"
-    else:
-        tendencia_actual = "BAJISTA"
-
-    detalle_analisis = f"Evaluación de movimiento en tiempo real (Precio previo: ${precio_anterior_btc:,.2f} -> Actual: ${precio_actual:,.2f})." if precio_anterior_btc else "Inicialización de lectura de tendencia."
-    
-    # Actualizar el precio anterior para el siguiente ciclo
-    precio_anterior_btc = precio_actual
-
-    alerta_btc = generar_mensaje_tendencia_btc(tendencia_actual, precio_actual, detalle_analisis)
-    print("\n---------------- [ TENDENCIA BTC ] ----------------")
-    print(alerta_btc)
-    print("---------------------------------------------------\n")
-    enviar_a_discord(alerta_btc)
-
-def monitor_sports_odds():
-    # Módulo de deportes limpio sin señales falsas pasadas
+# --- MÓDULO 1: Monitoreo de Ballenas y Noticias Influyentes ---
+def check_whale_movements():
+    # Simulación de detección de grandes transacciones de ballenas
     pass
 
-def bot_main_loop():
-    print(">>> Núcleo del bot iniciado con detección real de dirección (Alcista/Bajista).")
-    while True:
-        try:
-            monitor_kalshi_bitcoin()
-            monitor_sports_odds()
-        except Exception as e:
-            print(f"Error en el ciclo del bot: {e}")
-            
-        time.sleep(60)
+def fetch_influential_news():
+    # Simulación de obtención de noticias de las 10 personas/entidades más influyentes
+    pass
+
+# --- MÓDULO 2: Análisis de Precios de Bitcoin ($100 o más y dirección) ---
+def analyze_bitcoin_target(current_price, target_price):
+    """
+    Analiza si el precio actual se mueve $100 o más por encima o por debajo del target,
+    verificando la dirección del movimiento.
+    """
+    difference = current_price - target_price
+    abs_diff = abs(difference)
+
+    if abs_diff >= 100:
+        if difference > 0:
+            direction = "ALCISTA (Por encima del target)"
+        else:
+            direction = "BAJISTA (Por debajo del target)"
+        
+        alert_msg = (
+            f"🚨 **ALERTA DE BITCOIN** 🚨\n"
+            f"El precio se ha movido **${abs_diff:.2f}** respecto al target.\n"
+            f"Dirección: **{direction}**\n"
+            f"Precio Actual: ${current_price:.2f} | Target: ${target_price:.2f}"
+        )
+        send_discord_alert(alert_msg)
+
+# --- MÓDULO 3: Señales Deportivas en Vivo (Tenis, Soccer, Béisbol) ---
+def check_live_sports_signals(match_data):
+    """
+    Filtra solo juegos en vivo (excluyendo tardíos o finalizados) y emite recomendaciones
+    incluyendo el nombre del equipo/jugador (marcando si es Underdog) y el link directo.
+    """
+    # match_data['status'] debe ser 'LIVE'
+    if match_data.get("status") == "LIVE":
+        sport = match_data.get("sport") # Tenis, Soccer, Béisbol
+        competitor = match_data.get("name")
+        is_underdog = match_data.get("is_underdog", False)
+        game_link = match_data.get("direct_link")
+        
+        tag = " [UNDERDOG]" if is_underdog else ""
+        
+        message = (
+            f"⚽🎾⚾ **SEÑAL DEPORTIVA EN VIVO ({sport})**\n"
+            f"Recomendación activa para: **{competitor}**{tag}\n"
+            f"🔗 [Enlace directo al juego]({game_link})"
+        )
+        send_discord_alert(message)
+
+@app.route("/", methods=["POST"])
+def webhook_listener():
+    data = request.json
+    # Aquí puedes rutear los datos recibidos del mercado o webhooks externos
+    return "OK", 200
 
 if __name__ == "__main__":
-    server_thread = threading.Thread(target=run_http_server)
-    server_thread.daemon = True
-    server_thread.start()
-    
-    bot_thread = threading.Thread(target=bot_main_loop)
-    bot_thread.daemon = True
-    bot_thread.start()
-
-    while True:
-        time.sleep(10)
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
