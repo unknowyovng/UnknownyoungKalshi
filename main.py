@@ -5,7 +5,7 @@ from flask import Flask
 
 app = Flask(__name__)
 BASE_URL = "https://api.elections.kalshi.com/trade-api/v2"
-WEBHOOK_URL = "https://discord.com/api/webhooks/1533349076593283252/QPKKfcqt0F1I0WcUEnwI5GjVsQTQYL23BvX8F0YM1p4laseCH0iDNPhdfd0VApHafggJ"
+WEBHOOK_URL = "TU_WEBHOOK_DE_DISCORD_AQUI"
 
 
 @app.route("/", methods=["GET", "HEAD"])
@@ -16,19 +16,22 @@ def index():
 def monitorear_mercados():
     while True:
         try:
-            # 1. Monitoreo de Bitcoin y criptoactivos en Kalshi y Coinbase
-            # 2. Monitoreo de deportes: Tennis (ATP, WTA, ITF), Soccer y Baseball
-
-            underdog_detectado = True
-            if underdog_detectado:
-                nombre_underdog = "Melleiro"
-                enlace_juego = "https://kalshi.com/markets/..."
-                mensaje = f"¡ALERTA UNDERDOG!\nJugador: {nombre_underdog}\nEnlace: {enlace_juego}"
+            # 1. Monitoreo de Bitcoin, criptoactivos y tendencias (Alcista/Bajista)
+            # 2. Monitoreo de rachas de mercado en Kalshi
+            # 3. Monitoreo instantáneo de compras/ventas grandes en Bitcoin
+            # (con recomendación de comprar o vender basada en el movimiento)
+            
+            # Simulación de detección de orden grande
+            orden_grande_detectada = True
+            if orden_grande_detectada:
+                direccion = "ARRIBA" # o ABAJO
+                mensaje = f"¡ALERTA MOVIMIENTO GRANDE EN BITCOIN!\nEl mercado Kalshi se moverá más de $100.\nSe recomienda comprar: {direccion}"
                 requests.post(WEBHOOK_URL, json={"content": mensaje})
 
-            # 3. Monitoreo de noticias de las 10 personas más relevantes y empresas
-            # 4. Monitoreo de movimientos y compras/ventas de ballenas
-            # 5. Monitoreo de compras o ventas en Bitcoin que muevan el mercado más de $100
+            # 4. Monitoreo de deportes: Tennis (ATP, WTA, ITF), Soccer y Baseball
+            # 5. Detección de Underdog y enlaces específicos
+            # 6. Monitoreo de noticias de las 10 personas más relevantes y empresas
+            # 7. Monitoreo de movimientos y compras/ventas de ballenas
 
         except Exception as e:
             print(f"Error en el monitoreo: {e}")
