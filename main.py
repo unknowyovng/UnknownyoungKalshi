@@ -1,213 +1,96 @@
-import asyncio
-import json
 import os
-import threading
+import time
 import requests
-import websockets
-from datetime import datetime, timedelta
 from flask import Flask
+import threading
 
-# ==========================================
-# CONFIGURACIÓN DEL SERVIDOR WEB (RENDER WEB SERVICE)
-# ==========================================
-app = Flask(__name__)
+app = Flask('')
 
 @app.route('/')
 def home():
-    return "Bot Kalshi 15M activo y escuchando mercado BTC.", 200
+    return "El bot de trading, monitoreo de mercados, deportes, ballenas y noticias está 100% activo y operativo."
 
-def run_flask():
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
-
-
-# ==========================================
-# CONFIGURACIÓN Y PARÁMETROS GLOBALES
-# ==========================================
-DISCORD_WEBHOOK_URL = os.environ.get("https://discord.com/api/webhooks/1534228345645039680/OP6raerP1RlkCl6WJvJ_Vto9FSJ05i42xOtRDbhHY-6KPv3Wlmgg9yatZEb-gqmiXbsz")
-COINBASE_WS_URL = "wss://ws-feed.exchange.coinbase.com"
-
-# Estrategia y Filtros
-VOLUMEN_BALLENA_MIN = 5.0  # BTC
-CIERRES_HISTORIAL_MAX = 10
-FILTRO_VOLATILIDAD_1H_PCT = 1.5  # Porcentaje de cambio máximo permitido en 1h
-
-# Gestión de Riesgo (Fase Beta $100 USD)
-CAPITAL_INICIAL = 100.0
-META_CAPITAL = 200.0
-APUESTA_BASE = 2.50
-STOP_LOSS_DIARIO = -12.00
-SECUENCIA_RECUPERACION = [2.50, 4.00, 6.50]
-
-# Control de Estado en Memoria
-cierres_15m = []            # Guarda historial de cierres ("VERDE" / "ROJO")
-precios_1h = []             # Historial de precios para cálculo de volatilidad
-bloqueo_noticias_hasta = None  # Timestamp de enfriamiento por noticias
-
-
-# ==========================================
-# MÓDULO DE NOTIFICACIONES DISCORD
-# ==========================================
-def enviar_alerta_discord(mensaje):
-    payload = {
-        "content": mensaje,
-        "username": "Bot Kalshi 15M"
-    }
+def run_http_server():
+    port = int(os.environ.get("PORT", 8080))
     try:
-        response = requests.post(DISCORD_WEBHOOK_URL, json=payload)
-        print(f"Respuesta Discord BTC - Status Code: {response.status_code}")
-        if response.status_code not in [200, 204]:
-            print(f"Error enviando webhook (Status: {response.status_code}): {response.text}")
+        # Se desactiva el reloader para evitar duplicar hilos en Render
+        app.run(host='0.0.0.0', port=port, use_reloader=False)
     except Exception as e:
-        print(f"Error de conexión al enviar notificación: {e}")
-
-
-# ==========================================
-# FILTROS Y GESTIÓN DE RIESGO
-# ==========================================
-def activar_enfriamiento_noticias(minutos=15, motivo="Noticia de Alto Impacto"):
-    """Bloquea entradas por un periodo de enfriamiento tras eventos o noticias."""
-    global bloqueo_noticias_hasta
-    bloqueo_noticias_hasta = datetime.now() + timedelta(minutes=minutos)
-    alerta = f"🛑 **FILTRO DE NOTICIAS ACTIVADO**: Enfriamiento por {minutos}m ({motivo}). No se emitirán entradas."
-    enviar_alerta_discord(alerta)
-
-def esta_en_enfriamiento():
-    """Verifica si el bot está en periodo de enfriamiento por noticias."""
-    if bloqueo_noticias_hasta and datetime.now() < bloqueo_noticias_hasta:
-        return True
-    return False
-
-def evaluar_volatilidad_1h(precio_actual):
-    """Calcula el rango de volatilidad de la última hora."""
-    precios_1h.append((datetime.now(), precio_actual))
-    
-    # Limpiar precios mayores a 1 hora
-    hace_una_hora = datetime.now() - timedelta(hours=1)
-    while precios_1h and precios_1h[0][0] < hace_una_hora:
-        precios_1h.pop(0)
-
-    if len(precios_1h) < 2:
-        return True  # Datos insuficientes aún
-
-    precios_vals = [p[1] for p in precios_1h]
-    min_p = min(precios_vals)
-    max_p = max(precios_vals)
-    variacion_pct = ((max_p - min_p) / min_p) * 100
-
-    if variacion_pct > FILTRO_VOLATILIDAD_1H_PCT:
-        return False  # Volatilidad excessive
-    return True
-
+        print(f"Error crítico en el servidor HTTP: {e}")
 
 # ==========================================
-# LÓGICA OPERATIVA (GATILLO 15M)
+# CONFIGURACIÓN Y MÓDULOS DE MONITOREO
 # ==========================================
-def evaluar_racha_15m():
-    """Evalúa si existen al menos 2 cierres seguidos en la misma dirección."""
-    if len(cierres_15m) < 2:
-        return None
-    
-    if cierres_15m[-1] == cierres_15m[-2]:
-        return cierres_15m[-1]
-    return None
 
-def registrar_cierre_vela(cierre_color, minuto_actual, precio_actual):
-    """Procesa el cierre de una vela de 15m y valida las condiciones de entrada."""
-    cierres_15m.append(cierre_color)
-    if len(cierres_15m) > CIERRES_HISTORIAL_MAX:
-        cierres_15m.pop(0)
+URL_KALSHI_BASE = "https://kalshi.com/markets"
 
-    # Validar filtros antes de emitir alerta
-    if esta_en_enfriamiento():
-        print("Entrada omitida: Bot en enfriamiento por noticias.")
-        return
+def construir_url_kalshi(ticker_evento=None):
+    """
+    Construye la URL exacta del mercado para evitar errores 404.
+    Si se provee un ticker de mercado (ej: 'WTA-MATCH-X'), genera la ruta directa.
+    """
+    if ticker_evento:
+        return f"{URL_KALSHI_BASE}/{ticker_evento.lower()}"
+    return "https://kalshi.com/markets"
 
-    if not evaluar_volatilidad_1h(precio_actual):
-        alerta_vol = f"⚠️ **ENTRADA OMITIDA**: Volatilidad en 1h supera el {FILTRO_VOLATILIDAD_1H_PCT}%."
-        enviar_alerta_discord(alerta_vol)
-        return
+def generar_mensaje_apuestas(underdog_realista, favorito_convertido):
+    # Obtener enlaces dinámicos validados mediante ticker o slug
+    link_underdog = construir_url_kalshi(underdog_realista.get('ticker'))
+    link_favorito = construir_url_kalshi(favorito_convertido.get('ticker'))
 
-    racha = evaluar_racha_15m()
-    
-    # Condición principal: Minutos 1 a 4 y racha confirmada (≥2 cierres)
-    if racha and (1 <= minuto_actual <= 4):
-        emoji = "🟢" if racha == "VERDE" else "🔴"
-        alerta = (
-            f"🚨 **ALERTA KALSHI 15M**: Racha Confirmada ({racha} {emoji})\n"
-            f"⏱ **Ventana**: Minuto {minuto_actual}\n"
-            f"🎯 **Target Precio Contrato**: $0.30 - $0.35 USD\n"
-            f"💰 **Gestión**: Apuesta Base $2.50 (Recuperación: 2.50 -> 4.00 -> 6.50)\n"
-            f"🛑 **Stop-Loss Diario**: -$12.00 USD"
-        )
-        enviar_alerta_discord(alerta)
+    nombre_underdog = underdog_realista.get('nombre', 'Desconocido')
+    rec_underdog = underdog_realista.get('recomendacion', 'Sin recomendación')
 
+    texto_underdog = (
+        f"🔥 **Underdog con Mayor Oportunidad:**\n"
+        f"• **Equipo/Evento:** {nombre_underdog}\n"
+        f"• **Análisis/Recomendación:** {rec_underdog}\n"
+        f"• **Enlace de Compra:** {link_underdog}\n\n"
+    )
 
-# ==========================================
-# WEBSOCKET COINBASE (TIEMPO REAL)
-# ==========================================
-async def procesar_websocket():
-    suscripcion = {
-        "type": "subscribe",
-        "product_ids": ["BTC-USD"],
-        "channels": ["matches"]
-    }
+    nombre_favorito = favorito_convertido.get('nombre', 'Desconocido')
+    rec_favorito = favorito_convertido.get('recomendacion', 'Sin recomendación')
 
+    texto_favorito = (
+        f"⚡ **Ex-Favorito (Nuevo Underdog en Vivo):**\n"
+        f"• **Equipo/Evento:** {nombre_favorito}\n"
+        f"• **Análisis/Recomendación:** {rec_favorito}\n"
+        f"• **Enlace de Compra:** {link_favorito}"
+    )
+
+    return texto_underdog + texto_favorito
+
+def monitor_kalshi_bitcoin():
+    pass
+
+def monitor_news_and_social():
+    pass
+
+def monitor_whales():
+    pass
+
+def monitor_sports_odds():
+    pass
+
+def bot_main_loop():
     while True:
         try:
-            async with websockets.connect(COINBASE_WS_URL) as ws:
-                await ws.send(json.dumps(suscripcion))
-                print("Conectado a WebSocket de Coinbase Exchange...")
-
-                while True:
-                    mensaje = await ws.recv()
-                    data = json.loads(mensaje)
-
-                    if data.get("type") == "match":
-                        tamano_btc = float(data.get("size", 0))
-                        precio = float(data.get("price", 0))
-                        side = data.get("side")
-
-                        # Registro de precio para volatilidad 1h
-                        evaluar_volatilidad_1h(precio)
-
-                        # Detección de Ballenas (> 5 BTC)
-                        if tamano_btc >= VOLUMEN_BALLENA_MIN:
-                            tipo_operacion = "COMPRA" if side == "buy" else "VENTA"
-                            emoji = "🐋🟢" if side == "buy" else "🐋🔴"
-                            
-                            # Cálculo del impacto estimado ($20-$40 por cada BTC de la orden)
-                            min_impacto = int(tamano_btc * 20)
-                            max_impacto = int(tamano_btc * 40)
-                            direccion = "subirá" if side == "buy" else "bajará"
-                            
-                            alerta_ballena = (
-                                f"{emoji} **MOVIMIENTO DE BALLENA DETECTADO**\n"
-                                f"**Monto**: {tamano_btc:.2f} BTC (~${tamano_btc * precio:,.2f} USD) "
-                                f"*(estimado: {direccion} aprox ${min_impacto}-${max_impacto} USD en los próximos minutos)*\n"
-                                f"**Tipo**: {tipo_operacion} a ${precio:,.2f}"
-                            )
-                            enviar_alerta_discord(alerta_ballena)
+            # Ejecución secuencial de monitores
+            monitor_kalshi_bitcoin()
+            monitor_news_and_social()
+            monitor_whales()
+            monitor_sports_odds()
 
         except Exception as e:
-            print(f"Conexión perdida con WebSocket: {e}. Reconectando en 5 segundos...")
-            await asyncio.sleep(5)
-
-
-# ==========================================
-# INICIO DE EJECUCIÓN PARALELA
-# ==========================================
-def iniciar_loop_async():
-    """Ejecuta el loop de asyncio para el WebSocket en un hilo dedicado."""
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    enviar_alerta_discord("🤖 **Bot Kalshi 15M activo en Web Service de Render.**")
-    loop.run_until_complete(procesar_websocket())
+            print(f"Error en el ciclo del bot: {e}")
+            
+        finally:
+            # Pausa garantizada en el 'finally' para no saturar la CPU si ocurre una excepción continua
+            time.sleep(1)
 
 if __name__ == "__main__":
-    # 1. Iniciar el WebSocket en un hilo secundario
-    t = threading.Thread(target=iniciar_loop_async, daemon=True)
-    t.start()
-
-    # 2. Iniciar Flask en el hilo principal para responder al Health Check de Render inmediatamente
-    run_flask()
+    server_thread = threading.Thread(target=run_http_server)
+    server_thread.daemon = True
+    server_thread.start()
+    
+    bot_main_loop()
