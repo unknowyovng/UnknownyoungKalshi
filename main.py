@@ -58,7 +58,7 @@ def generar_mensaje_tendencia_btc(tendencia, precio_actual, detalle):
         icono = "📉"
         color_texto = "**TENDENCIA BAJISTA DETECTADA (BEARISH)**"
 
-    # Enlace seguro a la página principal de Kalshi para evitar errores 404
+    # Enlace seguro a Kalshi para evitar errores 404
     enlace_seguro = "https://kalshi.com"
 
     mensaje = (
@@ -66,7 +66,7 @@ def generar_mensaje_tendencia_btc(tendencia, precio_actual, detalle):
         f"• **Precio / Activo:** BTC a ${precio_actual}\n"
         f"• **Dirección del Mercado:** {tendencia.upper()}\n"
         f"• **Análisis Técnico:** {detalle}\n"
-        f"• **Enlace Directo:** [Abrir Kalshi]({enlace_seguro})"
+        f"• **Enlace Directo:** [Abrir Mercado BTC en Kalshi]({enlace_seguro})"
     )
     return mensaje
 
@@ -78,7 +78,7 @@ def generar_mensaje_apuestas(evento):
     motivo = evento.get('motivo', 'Variación drástica de cuotas en vivo por quiebre de servicio')
     linea = evento.get('linea', 'Scalping en vivo (1% a 99%)')
     
-    # Enlace seguro a la sección principal de Kalshi
+    # Enlace seguro a Kalshi para evitar errores 404
     enlace_seguro = "https://kalshi.com"
 
     tag_prioridad = "🎾🔥 [TENIS FEMENINO - MÁXIMA PRIORIDAD]" if "WTA" in deporte.upper() or "TENIS" in deporte.upper() else f"🏆 [SPORTS EN VIVO - {deporte.upper()}]"
@@ -90,7 +90,7 @@ def generar_mensaje_apuestas(evento):
         f"• **Recomendación:** {recomendacion}\n"
         f"• **Motivo:** {motivo}\n"
         f"• **Línea Extendida:** {linea}\n"
-        f"• **Enlace Directo:** [Abrir Kalshi]({enlace_seguro})"
+        f"• **Enlace Directo:** [Abrir Evento Deportivo en Kalshi]({enlace_seguro})"
     )
     return mensaje
 
@@ -108,26 +108,17 @@ def monitor_kalshi_bitcoin():
 def obtener_partidos_en_vivo_de_kalshi():
     """
     Filtro estricto: Solo permite eventos cuyo estado sea estrictamente 'EN VIVO' o 'LIVE'.
-    Descarta automáticamente partidos futuros ('Próximo') o finalizados ('Outcome determined').
+    Descarta automáticamente partidos futuros ('PROXIMO') o finalizados.
     """
     lista_eventos_mercado = [
         {
             'competencia': 'WTA Montreal Open',
             'nombres': 'Elena Rybakina vs Jessica Pegula (Set 2)',
             'deporte': 'Tenis Femenino (WTA)',
-            'estado': 'EN VIVO', # Obligatorio que sea EN VIVO
+            'estado': 'EN VIVO', # Obligatorio que esté activo en tiempo real
             'recomendacion': 'Comprar SÍ al Underdog (Jessica Pegula)',
             'motivo': 'Recuperación de quiebre en set 2; cuota con alta volatilidad para scalping.',
             'linea': 'Ganador del Set / Hándicap en vivo'
-        },
-        {
-            'competencia': 'ATP Masters',
-            'nombres': 'Partido por disputar (Mañana)',
-            'deporte': 'Tenis',
-            'estado': 'PROXIMO', # Este será descartado por el filtro
-            'recomendacion': 'N/A',
-            'motivo': 'Aún no inicia',
-            'linea': 'N/A'
         }
     ]
     
@@ -135,7 +126,7 @@ def obtener_partidos_en_vivo_de_kalshi():
     for ev in lista_eventos_mercado:
         estado = ev.get('estado', '').upper()
         
-        # FILTRADO ESTRICTO: Solo pasa si el estado es exactamente EN VIVO o LIVE
+        # FILTRADO ESTRICTO: Solo procesa si el juego está activo
         if estado not in ["EN VIVO", "LIVE"]:
             print(f">>> [FILTRADO Omitido] El evento '{ev['nombres']}' no está en juego (Estado: {estado}).")
             continue
