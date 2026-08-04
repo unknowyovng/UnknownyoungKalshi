@@ -1,14 +1,31 @@
 import asyncio
 import json
+import os
+import threading
 import requests
 import websockets
 from datetime import datetime, timedelta
+from flask import Flask
+
+# ==========================================
+# CONFIGURACIÓN DEL SERVIDOR WEB (PARA RENDER)
+# ==========================================
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot Kalshi 15M activo y escuchando mercado.", 200
+
+def run_flask():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
+
 
 # ==========================================
 # CONFIGURACIÓN Y PARÁMETROS GLOBALES
 # ==========================================
-# Reemplaza la siguiente cadena con tu NUEVA URL de Webhook de Discord
-DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1534228345645039680/OP6raerP1RlkCl6WJvJ_Vto9FSJ05i42xOtRDbhHY-6KPv3Wlmgg9yatZEb-gqmiXbsz"
+# Reemplaza la siguiente cadena con tu URL activa de Webhook de Discord
+DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/TU_WEBHOOK_ACTIVO_AQUI"
 COINBASE_WS_URL = "wss://ws-feed.exchange.coinbase.com"
 
 # Estrategia y Filtros
@@ -175,5 +192,8 @@ async def procesar_websocket():
 # PUNTO DE ENTRADA
 # ==========================================
 if __name__ == "__main__":
-    enviar_alerta_discord("🤖 **Bot Kalshi 15M desplegado correctamente.**")
+    # Iniciar servidor Flask en un hilo secundario para mantener el puerto activo en Render
+    threading.Thread(target=run_flask, daemon=True).start()
+
+    enviar_alerta_discord("🤖 **Bot Kalshi 15M desplegado correctamente con servidor HTTP activo.**")
     asyncio.run(procesar_websocket())
