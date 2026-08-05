@@ -127,16 +127,15 @@ async def agente_autonomo_ia():
         context = await browser.new_context()
         page = await context.new_page()
         
-        # CÓDIGO CORREGIDO (Evita el Timeout en Render)
-try:
-    await page.goto(
-        "https://www.tradingview.com/chart/?symbol=BINANCE:BTCUSDT", 
-        wait_until="domcontentloaded", 
-        timeout=60000
-       print("[AGENTE IA] Conectado a TradingView exitosamente.")
-except Exception as e:
-    print(f"[AVISO IA] Reintentando conexión a TradingView... {e}")
-        print("[AGENTE IA] Conectado a TradingView en tiempo real.")
+        try:
+            await page.goto(
+                "https://www.tradingview.com/chart/?symbol=BINANCE:BTCUSDT", 
+                wait_until="domcontentloaded", 
+                timeout=60000
+            )
+            print("[AGENTE IA] Conectado a TradingView en tiempo real.")
+        except Exception as e:
+            print(f"[AVISO IA] Reintentando conexión a TradingView... {e}")
 
         while True:
             try:
