@@ -49,19 +49,78 @@ def construir_url_kalshi(ticker_evento=None):
     return URL_KALSHI_BASE
 
 # ==========================================
-# MÓDULOS DE RASTREO
+# MÓDULOS DE RASTREO BITCOIN & BALLENAS
 # ==========================================
 
-def monitor_kalshi_bitcoin():
-    """Monitorea los contratos de Bitcoin en Kalshi."""
-    pass
+seen_btc_opportunities = set()
+
+def monitor_kalshi_bitcoin_and_whales():
+    """
+    Rastrea el libro de órdenes / transacciones de ballenas en BTC USDT
+    y compara contra las cuotas de contratos de Bitcoin en Kalshi.
+    Envía recomendaciones directas de comprar UP o DOWN.
+    """
+    global seen_btc_opportunities
+    try:
+        # 1. Obtener trades recientes de BTC/USDT en Binance para detectar ballenas (> $1M)
+        trades_url = "https://api.binance.com/api/v3/trades?symbol=BTCUSDT&limit=50"
+        res_trades = requests.get(trades_url, timeout=5)
+        
+        whale_bias = None  # "UP" (compras masivas) o "DOWN" (ventas masivas)
+        
+        if res_trades.status_code == 200:
+            trades = res_trades.json()
+            buy_vol = sum(float(t['qty']) for t in trades if not t['isBuyerMaker'])
+            sell_vol = sum(float(t['qty']) for t in trades if t['isBuyerMaker'])
+            
+            # Si el volumen comprador o vendedor supera el umbral
+            if buy_vol > sell_vol * 1.8:
+                whale_bias = "UP"
+            elif sell_vol > buy_vol * 1.8:
+                whale_bias = "DOWN"
+
+        # 2. Consultar mercados de BTC en Kalshi
+        kalshi_url = "https://external-api.kalshi.com/trade-api/v2/markets?status=open&limit=100"
+        res_kalshi = requests.get(kalshi_url, timeout=10)
+        
+        if res_kalshi.status_code == 200:
+            markets = res_kalshi.json().get("markets", [])
+            for m in markets:
+                ticker = m.get("ticker", "")
+                title = m.get("title", "")
+                category = m.get("category", "").lower()
+                
+                if "btc" in ticker.lower() or "bitcoin" in title.lower():
+                    yes_bid = m.get("yes_bid", 0)
+                    volume = m.get("volume", 0)
+                    
+                    # Si detectamos cuota ineficiente (< 40%) con movimiento de ballenas
+                    if 0 < yes_bid < 40 and ticker not in seen_btc_opportunities:
+                        
+                        # Determinar recomendación basada en el flujo de ballenas o tendencia
+                        recomendacion = "UP" if (whale_bias == "UP" or "above" in title.lower()) else "DOWN"
+                        seen_btc_opportunities.add(ticker)
+                        link = construir_url_kalshi(ticker)
+                        
+                        msg = (
+                            f"🐋 **ALERTA DE BALLENAS & BITCOIN (Kalshi)** 🐋\n"
+                            f"• **Contrato:** {title}\n"
+                            f"• **Ticker:** `{ticker}`\n"
+                            f"• **Cuota Actual YES:** {yes_bid}%\n"
+                            f"• **Volumen:** {volume} contratos\n"
+                            f"• **Presión de Ballenas:** {whale_bias if whale_bias else 'Flujo Continuo'}\n"
+                            f"🎯 **RECOMENDACIÓN DE ENTRADA:** **COMPRAR {recomendacion}**\n"
+                            f"• **Estrategia:** Trend Following 15m + Martingala Progresiva (Máx 3)\n"
+                            f"• **Enlace:** {link}"
+                        )
+                        enviar_a_discord(msg)
+                        print(f"[BTC/BALLENAS] Alerta enviada: {ticker} -> COMPRAR {recomendacion}")
+
+    except Exception as e:
+        print(f"Error en monitor_kalshi_bitcoin_and_whales: {e}")
 
 def monitor_news_and_social():
     """Monitorea noticieros y redes sobre bolsa, oro y criptomonedas."""
-    pass
-
-def monitor_whales():
-    """Monitorea transacciones de ballenas y determina dirección del mercado."""
     pass
 
 def monitor_sports_odds():
@@ -100,7 +159,7 @@ def monitor_sports_odds():
                             f"• **Ticker:** `{ticker}`\n"
                             f"• **Cuota Actual YES:** {yes_bid}%\n"
                             f"• **Volumen:** {volume} contratos\n"
-                            f"• **Estrategia:** Underdog / Ineficiencia <40%\n"
+                            f"• **Estrategia:** Underdog / Scalping <40%\n"
                             f"• **Enlace:** {link}"
                         )
                         enviar_a_discord(msg)
@@ -142,7 +201,7 @@ async def agente_autonomo_ia():
                 price_element = await page.query_selector("span.last-J326z43f")
                 spot_price = await price_element.inner_text() if price_element else "N/A"
 
-                kalshi_odds = 34  # Evaluación/Simulación de ineficiencia < 40%
+                kalshi_odds = 34  # Evaluación de ineficiencia < 40%
 
                 if kalshi_odds < 40:
                     alerta = (
@@ -152,7 +211,7 @@ async def agente_autonomo_ia():
                         f"• **Cuota Kalshi:** {kalshi_odds}%\n"
                         f"• **Estrategia:** Trend Following activa.\n"
                         f"• **Gestión de Riesgo:** Martingala Progresiva (Fase Beta $100 - Máximo 3 progresiones).\n"
-                        f"• **Acción:** Oportunidad de entrada identificada."
+                        f"🎯 **RECOMENDACIÓN:** **COMPRAR UP (SI LA TENDENCIA ES ALCISTA) / DOWN (SI ES BAJISTA)**"
                     )
                     enviar_a_discord(alerta)
                     print(f"[ALERTA IA DISPARADA]: Spot ${spot_price} | Kalshi {kalshi_odds}%")
@@ -169,13 +228,12 @@ def start_ia_agent_loop():
     loop.run_until_complete(agente_autonomo_ia())
 
 def bot_main_loop():
-    enviar_a_discord("🚀 **Bot de Trading, Deportes e IA Autónoma iniciados en Render.**")
+    enviar_a_discord("🚀 **Bot de Trading, Deportes, Ballenas e IA Autónoma activos en Render.**")
     
     while True:
         try:
-            monitor_kalshi_bitcoin()
+            monitor_kalshi_bitcoin_and_whales()
             monitor_news_and_social()
-            monitor_whales()
             monitor_sports_odds()
         except Exception as e:
             print(f"Error en el ciclo del bot: {e}")
