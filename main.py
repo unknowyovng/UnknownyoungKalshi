@@ -58,11 +58,10 @@ def monitor_kalshi_bitcoin_and_whales():
     """
     Rastrea el libro de órdenes / transacciones de ballenas en BTC USDT
     y compara contra las cuotas de contratos de Bitcoin en Kalshi.
-    Envía recomendaciones directas de comprar UP o DOWN.
     """
     global seen_btc_opportunities
     try:
-        # 1. Obtener trades recientes de BTC/USDT en Binance para detectar ballenas (> $1M)
+        # 1. Obtener trades recientes de BTC/USDT en Binance para detectar ballenas
         trades_url = "https://api.binance.com/api/v3/trades?symbol=BTCUSDT&limit=50"
         res_trades = requests.get(trades_url, timeout=5)
         
@@ -73,7 +72,6 @@ def monitor_kalshi_bitcoin_and_whales():
             buy_vol = sum(float(t['qty']) for t in trades if not t['isBuyerMaker'])
             sell_vol = sum(float(t['qty']) for t in trades if t['isBuyerMaker'])
             
-            # Si el volumen comprador o vendedor supera el umbral
             if buy_vol > sell_vol * 1.8:
                 whale_bias = "UP"
             elif sell_vol > buy_vol * 1.8:
@@ -88,16 +86,12 @@ def monitor_kalshi_bitcoin_and_whales():
             for m in markets:
                 ticker = m.get("ticker", "")
                 title = m.get("title", "")
-                category = m.get("category", "").lower()
                 
                 if "btc" in ticker.lower() or "bitcoin" in title.lower():
                     yes_bid = m.get("yes_bid", 0)
                     volume = m.get("volume", 0)
                     
-                    # Si detectamos cuota ineficiente (< 40%) con movimiento de ballenas
                     if 0 < yes_bid < 40 and ticker not in seen_btc_opportunities:
-                        
-                        # Determinar recomendación basada en el flujo de ballenas o tendencia
                         recomendacion = "UP" if (whale_bias == "UP" or "above" in title.lower()) else "DOWN"
                         seen_btc_opportunities.add(ticker)
                         link = construir_url_kalshi(ticker)
@@ -108,7 +102,7 @@ def monitor_kalshi_bitcoin_and_whales():
                             f"• **Ticker:** `{ticker}`\n"
                             f"• **Cuota Actual YES:** {yes_bid}%\n"
                             f"• **Volumen:** {volume} contratos\n"
-                            f"• **Presión de Ballenas:** {whale_bias if whale_bias else 'Flujo Continuo'}\n"
+                            f"• **Presión de Ballenas:** {whale_bias if whale_bias else 'Flujo Normal'}\n"
                             f"🎯 **RECOMENDACIÓN DE ENTRADA:** **COMPRAR {recomendacion}**\n"
                             f"• **Estrategia:** Trend Following 15m + Martingala Progresiva (Máx 3)\n"
                             f"• **Enlace:** {link}"
@@ -172,12 +166,16 @@ def monitor_sports_odds():
 # AGENTE IA AUTÓNOMO PLAYWRIGHT (REGLA DE ORO)
 # ==========================================
 
+ultimo_precio_alerta = None
+
 async def agente_autonomo_ia():
     """
-    Navegador IA autónomo que monitorea TradingView en vivo en gráficos de 15m.
-    Aplica la Regla de Oro: Ineficiencia en Kalshi < 40% + Trend Following + Martingala Progresiva (Máx 3).
+    Navegador IA autónomo que monitorea Binance/TradingView en vivo y dispara
+    alertas de ineficiencia reales (<40%) sin saturar Discord con spam.
     """
+    global ultimo_precio_alerta
     print("[AGENTE IA] Iniciando motor Playwright Chromium...")
+    
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
@@ -198,26 +196,44 @@ async def agente_autonomo_ia():
 
         while True:
             try:
+                # 1. Obtención directa de precio Spot BTC en tiempo real desde Binance
                 try:
-                    btc_res = requests.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT", timeout=3).json()
-                    spot_price = f"{float(btc_res['price']):,.2f}"
+                    btc_data = requests.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT", timeout=5).json()
+                    raw_price = float(btc_data['price'])
+                    spot_price = f"{raw_price:,.2f}"
                 except Exception:
                     spot_price = "N/A"
-                
-                kalshi_odds = 34  # Evaluación de ineficiencia < 40%
+                    raw_price = 0
 
-                if kalshi_odds < 40:
-                    alerta = (
-                        f"🚨 **REGLA DE ORO: INEFICIENCIA DETECTADA (<40%)** 🚨\n"
-                        f"• **Activo:** BTC/USDT (Velas 15m)\n"
-                        f"• **Precio Spot TradingView:** ${spot_price}\n"
-                        f"• **Cuota Kalshi:** {kalshi_odds}%\n"
-                        f"• **Estrategia:** Trend Following activa.\n"
-                        f"• **Gestión de Riesgo:** Martingala Progresiva (Fase Beta $100 - Máximo 3 progresiones).\n"
-                        f"🎯 **RECOMENDACIÓN:** **COMPRAR UP (SI LA TENDENCIA ES ALCISTA) / DOWN (SI ES BAJISTA)**"
-                    )
-                    enviar_a_discord(alerta)
-                    print(f"[ALERTA IA DISPARADA]: Spot ${spot_price} | Kalshi {kalshi_odds}%")
+                # 2. Consultar cuota real en Kalshi para el mercado de BTC
+                kalshi_odds = None
+                try:
+                    res_k = requests.get("https://external-api.kalshi.com/trade-api/v2/markets?status=open&limit=50", timeout=5)
+                    if res_k.status_code == 200:
+                        markets = res_k.json().get("markets", [])
+                        for m in markets:
+                            if "btc" in m.get("ticker", "").lower() or "bitcoin" in m.get("title", "").lower():
+                                kalshi_odds = m.get("yes_bid", 0)
+                                break
+                except Exception:
+                    kalshi_odds = None
+
+                # 3. Disparar solo si existe cuota real < 40% y el precio ha variado (> $50 USD)
+                if kalshi_odds is not None and 0 < kalshi_odds < 40:
+                    if ultimo_precio_alerta is None or abs(raw_price - ultimo_precio_alerta) > 50:
+                        ultimo_precio_alerta = raw_price
+                        
+                        alerta = (
+                            f"🚨 **REGLA DE ORO: INEFICIENCIA DETECTADA (<40%)** 🚨\n"
+                            f"• **Activo:** BTC/USDT (Velas 15m)\n"
+                            f"• **Precio Spot Binance:** ${spot_price}\n"
+                            f"• **Cuota Kalshi:** {kalshi_odds}%\n"
+                            f"• **Estrategia:** Trend Following activa.\n"
+                            f"• **Gestión de Riesgo:** Martingala Progresiva (Fase Beta $100 - Máximo 3 progresiones).\n"
+                            f"🎯 **RECOMENDACIÓN:** **COMPRAR UP (SI TENDENCIA ES ALCISTA) / DOWN (SI ES BAJISTA)**"
+                        )
+                        enviar_a_discord(alerta)
+                        print(f"[ALERTA DISPARADA] Spot: ${spot_price} | Kalshi: {kalshi_odds}%")
 
                 await asyncio.sleep(15)
 
