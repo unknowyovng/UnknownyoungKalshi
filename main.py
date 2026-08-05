@@ -9,8 +9,9 @@ from playwright.async_api import async_playwright
 # Configuración del servidor HTTP (Keep-Alive para evitar caídas en Render)
 app = Flask('')
 
-@app.route('/')
+@app.route('/', methods=['GET', 'HEAD'])
 def home():
+    """Responde tanto a peticiones GET como HEAD de Render Health Check."""
     return "El bot de trading cuantitativo, monitoreo de mercados, deportes, ballenas y noticias está 100% activo y operativo.", 200
 
 def run_http_server():
@@ -19,6 +20,22 @@ def run_http_server():
         app.run(host='0.0.0.0', port=port, use_reloader=False)
     except Exception as e:
         print(f"Error crítico en el servidor HTTP: {e}")
+
+def self_ping_loop():
+    """Mantiene la instancia de Render activa enviando un ping cada 4 minutos."""
+    time.sleep(10)
+    port = os.environ.get("PORT", "8080")
+    # Usa RENDER_EXTERNAL_URL si existe, o localhost como respaldo
+    url = os.environ.get("RENDER_EXTERNAL_URL", f"http://127.0.0.1:{port}/")
+    print(f"[SELF-PING] Servicio de Keep-Alive iniciado apuntando a: {url}")
+    
+    while True:
+        try:
+            requests.get(url, timeout=10)
+            print("[SELF-PING] Ping de mantenimiento enviado con éxito.")
+        except Exception as e:
+            print(f"[SELF-PING] Error al enviar ping: {e}")
+        time.sleep(240)  # Cada 4 minutos (antes del límite de inactivación de 5m de Render)
 
 # ==========================================
 # CONFIGURACIÓN Y COMUNICACIÓN DISCORD
@@ -264,10 +281,17 @@ def bot_main_loop():
 # ==========================================
 
 if __name__ == "__main__":
+    # 1. Hilo del Servidor Web Flask
     server_thread = threading.Thread(target=run_http_server, daemon=True)
     server_thread.start()
 
+    # 2. Hilo del Auto-Ping para evitar que Render entre en reposo
+    ping_thread = threading.Thread(target=self_ping_loop, daemon=True)
+    ping_thread.start()
+
+    # 3. Hilo del Agente IA (Playwright)
     ia_thread = threading.Thread(target=start_ia_agent_loop, daemon=True)
     ia_thread.start()
 
+    # 4. Ciclo Principal de Monitoreo
     bot_main_loop()
