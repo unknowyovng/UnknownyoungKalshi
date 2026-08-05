@@ -133,8 +133,7 @@ try:
         "https://www.tradingview.com/chart/?symbol=BINANCE:BTCUSDT", 
         wait_until="domcontentloaded", 
         timeout=60000
-    )
-    print("[AGENTE IA] Conectado a TradingView exitosamente.")
+       print("[AGENTE IA] Conectado a TradingView exitosamente.")
 except Exception as e:
     print(f"[AVISO IA] Reintentando conexión a TradingView... {e}")
         print("[AGENTE IA] Conectado a TradingView en tiempo real.")
