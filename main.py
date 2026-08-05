@@ -198,9 +198,12 @@ async def agente_autonomo_ia():
 
         while True:
             try:
-                price_element = await page.query_selector("span.last-J326z43f")
-                spot_price = await price_element.inner_text() if price_element else "N/A"
-
+                try:
+                    btc_res = requests.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT", timeout=3).json()
+                    spot_price = f"{float(btc_res['price']):,.2f}"
+                except Exception:
+                    spot_price = "N/A"
+                
                 kalshi_odds = 34  # Evaluación de ineficiencia < 40%
 
                 if kalshi_odds < 40:
